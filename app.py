@@ -171,9 +171,9 @@ section[data-testid="stSidebar"] button {{text-align:center !important;}}
 section[data-testid="stSidebar"] button p {{text-align:center !important; font-size:19px !important;}}
 section[data-testid="stSidebar"] h2 {{font-size:15px !important; text-align:center;}}
 .st-key-first, .st-key-back, .st-key-fwd, .st-key-last,
-.st-key-flip_btn, .st-key-ret_btn, .st-key-menu_btn {{text-align:center;}}
+.st-key-undo_btn, .st-key-why_btn {{text-align:center;}}
 .st-key-first button, .st-key-back button, .st-key-fwd button, .st-key-last button,
-.st-key-flip_btn button, .st-key-ret_btn button, .st-key-menu_btn button {{
+.st-key-undo_btn button, .st-key-why_btn button {{
   border-radius:50% !important; width:40px !important; height:40px !important;
   min-height:0 !important; padding:0 !important; margin:0 auto !important;}}
 button[data-testid="stBaseButton-primary"] {{
@@ -184,6 +184,43 @@ div[data-testid="stDataFrame"], div.stCodeBlock {{
   background:{card}; border:1px solid {border}; border-radius:8px;}}
 [data-testid="stRadio"] label {{color:{fg};}}
 .stCodeBlock code, .stCodeBlock pre {{color:{fg} !important;}}
+.block-container {{padding:.6rem 1rem 2rem !important; max-width:1560px !important;}}
+div[data-testid="stVerticalBlock"] {{gap:.3rem !important;}}
+div[data-testid="stHorizontalBlock"] {{gap:.3rem !important;}}
+div[data-testid="column"] {{padding-left:.12rem !important; padding-right:.12rem !important;}}
+[class*="st-key-rank"] div[data-testid="stHorizontalBlock"] {{gap:0 !important;}}
+[class*="st-key-rank"] div[data-testid="column"] {{
+  padding-left:0 !important; padding-right:0 !important;}}
+[class*="st-key-tool"] {{text-align:center;}}
+[class*="st-key-tool"] button {{
+  border-radius:6px !important; min-height:30px !important; height:30px !important;
+  width:34px !important; margin:0 auto !important; padding:0 !important; font-size:14px !important;}}
+.st-key-close_tab button, .st-key-new_tab button {{
+  min-height:30px !important; height:30px !important; padding:0 .4rem !important;}}
+.st-key-sb_play button p {{color:#e63946 !important;}}
+.st-key-sb_import button p {{color:#f4a261 !important;}}
+.st-key-sb_setup button p {{color:#4cc9f0 !important;}}
+.st-key-sb_ex button p {{color:#80ed99 !important;}}
+.st-key-sb_hist button p {{color:#ffd166 !important;}}
+.st-key-sb_help button p {{color:#95d5b2 !important;}}
+section[data-testid="stSidebar"] .st-key-sb_decode button {{
+  border-radius:8px !important;}}
+section[data-testid="stSidebar"] .st-key-sb_decode button p {{
+  font-size:12px !important; font-weight:800 !important; white-space:nowrap !important;}}
+.dc-tab {{display:inline-block; background:{card}; border:1px solid {border};
+  border-bottom:2px solid #ffcc44; border-radius:8px 8px 0 0; padding:.15rem .8rem;
+  font-weight:700;}}
+.dc-tool button {{
+  border:1px solid {border} !important; border-radius:6px !important;
+  min-height:30px !important; height:30px !important; width:32px !important;
+  padding:0 !important; font-size:14px !important;}}
+.dc-tool {{text-align:center;}}
+.st-key-mini_menu button, .st-key-mini_cut button, .st-key-mini_flip button,
+.st-key-mini_ret button {{
+  border-radius:50% !important; width:34px !important; height:34px !important;
+  min-height:0 !important; padding:0 !important; margin:2px auto !important;}}
+.st-key-mini_menu, .st-key-mini_cut, .st-key-mini_flip, .st-key-mini_ret {{
+  text-align:center;}}
 </style>"""
 
 
@@ -304,7 +341,8 @@ def render_board(b: chess.Board, best_uci: str | None):
     ranks = range(7, -1, -1) if not flip else range(8)
     files = range(8) if not flip else range(7, -1, -1)
     for r in ranks:
-        row = st.columns(8, gap="small")
+        ctn = st.container(key=f"rank_{r:02d}")
+        row = ctn.columns(8, gap="small")
         for ci, f in enumerate(files):
             sq = chess.square(f, r)
             label = square_label(b, sq, targets)
@@ -426,10 +464,10 @@ def captured_rail_html(b: chess.Board) -> str:
 # ---------------------------------------------------------------- sidebar (mirrors DecodeChess icon rail)
 st.markdown(theme_css(), unsafe_allow_html=True)
 with st.sidebar:
-    st.markdown("<div style='text-align:center;line-height:1.15'><div style='font-size:30px'>♛</div>"
-                "<div style='font-size:12px;font-weight:800;color:#f2f5f9'>Chess<br>Explainer</div></div>",
+    st.markdown("<div style='text-align:center;font-size:30px;line-height:1'>♞</div>",
                 unsafe_allow_html=True)
-    with st.popover("⚔", help="Play against the engine", use_container_width=True):
+    with st.popover("⚔", help="Play against the engine", key="sb_play",
+                     use_container_width=True):
         st.markdown("Play against the engine from the current board.")
         st.session_state.play_mode = st.checkbox("Engine replies to my moves",
                                                  value=st.session_state.play_mode)
@@ -440,7 +478,8 @@ with st.sidebar:
         st.session_state.play_color = st.selectbox(
             "Engine plays", ["Black", "White"],
             index=0 if st.session_state.play_color == "Black" else 1)
-    with st.popover("⤓", help="Import a PGN game", use_container_width=True):
+    with st.popover("⤓", help="Import a PGN game", key="sb_import",
+                     use_container_width=True):
         st.markdown("Paste a PGN game to decode it move by move.")
         pgn_in = st.text_area("PGN", height=100, key="pgn_in",
                               placeholder="1. e4 e5 2. Nf3 ...")
@@ -456,7 +495,8 @@ with st.sidebar:
                     st.rerun()
             except Exception as e:
                 st.error(f"PGN error: {e}")
-    with st.popover("⚙", help="Set up a position (FEN)", use_container_width=True):
+    with st.popover("⚙", help="Set up a position (FEN)", key="sb_setup",
+                     use_container_width=True):
         fen_in = st.text_input("FEN", value=cur().fen(), key="fen_in")
         if st.button("Load FEN", key="load_fen", use_container_width=True):
             try:
@@ -468,23 +508,31 @@ with st.sidebar:
         if st.button("Reset to start", key="reset_board", use_container_width=True):
             goto_root(chess.STARTING_FEN)
             st.rerun()
-    with st.popover("★", help="Load famous examples", use_container_width=True):
+    with st.popover("★", help="Load famous examples", key="sb_ex",
+                     use_container_width=True):
         for name, fen in SAMPLES.items():
             if st.button(name, key=f"ex_{abs(hash(name)) % 10**8}",
                          use_container_width=True):
                 goto_root(fen)
                 st.rerun()
-    with st.popover("🕘", help="Position history", use_container_width=True):
+    with st.popover("🕘", help="Position history", key="sb_hist",
+                     use_container_width=True):
         for i, f in enumerate(reversed(st.session_state.visited[-8:])):
             if st.button(f"{len(st.session_state.visited)-i}. {f[:38]}…",
                          key=f"hist_{i}", use_container_width=True):
                 goto_root(f)
                 st.rerun()
-    with st.popover("❓", help="How to read a decode", use_container_width=True):
+    with st.popover("❓", help="How to read a decode", key="sb_help",
+                     use_container_width=True):
         st.markdown("**How to read a decode**\n1. Press **🔍 Decode** under the board\n"
                     "2. Read the assessment + best line\n3. Open *is good because it* bullets\n"
                     "4. Check *Major threats* and *How to find the best move*\n"
                     "5. Click your own pieces on the board to move")
+    if st.button("Decode", key="sb_decode", type="primary", use_container_width=True,
+                 help="Explain the best move"):
+        with st.spinner("Decoding…"):
+            run_decode(cur())
+        st.rerun()
     st.checkbox("🌙", key="dark", help="Dark mode")
 
 # ---------------------------------------------------------------- main
@@ -497,17 +545,42 @@ if st.session_state.tour:
             st.session_state.tour = False
             st.rerun()
 
-t1, t2, t3 = st.columns([6, 1, 3])
-with t1:
-    st.markdown(f"**♟ {game_name()}**")
-with t2:
-    if st.button("+ New", key="new_tab", help="Open a fresh analysis board"):
+strip = st.columns([3.4, .45, .45, 1.2, .55, .55, .55, .55, .55, .55, .55, .55, .55])
+with strip[0]:
+    st.markdown(f"<span class='dc-tab'>♟ {game_name()}</span>", unsafe_allow_html=True)
+with strip[1]:
+    if st.button("×", key="close_tab", help="Back to start of game"):
+        st.session_state.view = 0
+        st.session_state.pop("gameslider", None)
+        st.rerun()
+with strip[2]:
+    if st.button("+", key="new_tab", help="Open a fresh analysis board"):
         goto_root(chess.STARTING_FEN)
         st.rerun()
-with t3:
+with strip[3]:
     st.caption(f"{'♟ Stockfish ' + str(st.session_state.sf_depth) if SF_ON else '🐍 Local engine'}")
-
-st.code(cur().fen(), language=None)
+def _tool(col, label, key, help_, fn):
+    with strip[col]:
+        if st.button(label, key=key, help=help_):
+            fn()
+            st.rerun()
+def _goto_panel(i):
+    st.session_state.panel_idx = i
+_tool(4, "↩", "tool_back", "Take back move",
+      lambda: (st.session_state.update(view=max(0, st.session_state.view - 1)),
+               st.session_state.pop("gameslider", None)))
+_tool(5, "📈", "tool_graph", "Graph — evaluation curve", lambda: _goto_panel(2))
+_tool(6, "ⓘ", "tool_info", "Game info", lambda: _goto_panel(6))
+_tool(7, "🐟", "tool_fish", "Engine analysis", lambda: _goto_panel(4))
+_tool(8, "📊", "tool_stats", "Game statistics", lambda: _goto_panel(5))
+_tool(9, "☰", "tool_game", "Game moves", lambda: _goto_panel(1))
+_tool(10, "⌖", "tool_ret", "Return to the decoded position",
+      lambda: (setattr(st.session_state, "view",
+                       st.session_state.decode["ply"])
+               if st.session_state.decode else None))
+_tool(11, "⟲", "tool_flip", "Flip the board",
+      lambda: st.session_state.update(flip=not st.session_state.flip))
+_tool(12, "🔍", "tool_dec", "Read the decode", lambda: _goto_panel(0))
 
 left, right = st.columns([6, 6])
 b = cur()
@@ -518,8 +591,68 @@ if _dec and _dec.get("fen") == b.fen() and _dec.get("candidates"):
 else:
     eval_white = evaluate_board(b)
 
+def run_decode(bd: chess.Board):
+    depth = D
+    plies = st.session_state.get("plies", 7)
+    cand = engine_best_moves(bd, depth=depth, limit=5, time_s=0.6)
+    line = best_line(bd, depth=depth, plies=plies)
+    expl = explain_move(bd, cand[0][0], depth=depth) if cand else None
+    verdict = None
+    if st.session_state.view > 0:
+        before = board_at(st.session_state.view - 1)
+        try:
+            verdict = move_verdict(
+                before, chess.Move.from_uci(
+                    st.session_state.moves[st.session_state.view - 1]),
+                depth=depth)
+        except Exception:
+            verdict = None
+    searched_white = (cand[0][1] if bd.turn == chess.WHITE else -cand[0][1]) if cand else None
+    st.session_state.decode = {
+        "fen": bd.fen(), "ply": st.session_state.view,
+        "candidates": [(mv.uci(), s) for mv, s in cand],
+        "line": [(san, mv.uci(), sc) for san, mv, sc in line],
+        "expl": expl, "verdict": verdict,
+        "best_uci": cand[0][0].uci() if cand else None,
+        "assessment": position_assessment(bd, searched_white),
+    }
+    n = bd.fullmove_number
+    prefix = f"{n}. " if bd.turn == chess.WHITE else f"{n}... "
+    played = (verdict["san"] if verdict else None)
+    label = prefix + (expl["san"] if expl else "?") + (f" ({played})" if played else "")
+    st.session_state.decodes.append({"label": label, "fen": bd.fen()})
+    st.session_state.panel_idx = 0
+
+
 with left:
-    eb, bb, rail = st.columns([0.6, 7.2, 1.7])
+    mini, eb, bb, rail = st.columns([0.42, 0.5, 7, 1.6])
+    with mini:
+        with st.popover("⋮", help="Game menu"):
+            st.code(b.fen(), language=None)
+            if st.button("Copy PGN of session", key="copypgn"):
+                st.session_state.show_pgn = True
+            if st.session_state.get("show_pgn"):
+                game = chess.pgn.Game.from_board(board_at(0))
+                node = game
+                for u in st.session_state.moves:
+                    node = node.add_variation(chess.Move.from_uci(u))
+                exp = chess.pgn.StringExporter(headers=True, variations=False, comments=False)
+                st.code(game.accept(exp), language=None)
+            if st.button("Restart position", key="restart"):
+                goto_root(st.session_state.root_fen)
+                st.rerun()
+        if st.button("✂", key="mini_cut", help="Clear selection"):
+            st.session_state.selected = None
+            st.session_state.pending_promo = None
+            st.rerun()
+        if st.button("⟲", key="mini_flip", help="Flip the board"):
+            st.session_state.flip = not st.session_state.flip
+            st.rerun()
+        _rd = st.session_state.decode
+        if st.button("⌖", key="mini_ret", help="Return to the decoded position",
+                     disabled=_rd is None):
+            st.session_state.view = _rd["ply"]
+            st.rerun()
     with eb:
         st.markdown(evalbar_html(eval_white), unsafe_allow_html=True)
     with bb:
@@ -528,7 +661,7 @@ with left:
         render_board(b, best_uci)
     with rail:
         st.markdown(captured_rail_html(b), unsafe_allow_html=True)
-    tb = st.columns([1, 1, 1, 1, 4, 1, 1, 1])
+    tb = st.columns([1, 1, 1, 1, 4, 1, 1])
     with tb[0]:
         if st.button("|◀", key="first", help="Go to start",
                      disabled=st.session_state.view <= 0, use_container_width=True):
@@ -559,65 +692,19 @@ with left:
         if st.button("🔍 Decode", key="decode_btn", type="primary",
                      help="Explain the best move", use_container_width=True):
             with st.spinner("Decoding…"):
-                depth = D
-                plies = st.session_state.get("plies", 7)
-                cand = engine_best_moves(b, depth=depth, limit=5, time_s=0.6)
-                line = best_line(b, depth=depth, plies=plies)
-                expl = explain_move(b, cand[0][0], depth=depth) if cand else None
-                verdict = None
-                if st.session_state.view > 0:
-                    before = board_at(st.session_state.view - 1)
-                    try:
-                        verdict = move_verdict(
-                            before, chess.Move.from_uci(
-                                st.session_state.moves[st.session_state.view - 1]),
-                            depth=depth)
-                    except Exception:
-                        verdict = None
-                searched_white = (cand[0][1] if b.turn == chess.WHITE else -cand[0][1]) if cand else None
-                d = {
-                    "fen": b.fen(), "ply": st.session_state.view,
-                    "candidates": [(mv.uci(), s) for mv, s in cand],
-                    "line": [(san, mv.uci(), sc) for san, mv, sc in line],
-                    "expl": expl, "verdict": verdict,
-                    "best_uci": cand[0][0].uci() if cand else None,
-                    "assessment": position_assessment(b, searched_white),
-                }
-                st.session_state.decode = d
-                n = b.fullmove_number
-                prefix = f"{n}. " if b.turn == chess.WHITE else f"{n}... "
-                played = (verdict["san"] if verdict else None)
-                label = prefix + (expl["san"] if expl else "?") + (f" ({played})" if played else "")
-                st.session_state.decodes.append({"label": label, "fen": b.fen()})
-                st.session_state.panel_idx = 0
+                run_decode(b)
             st.rerun()
     with tb[5]:
-        if st.button("⟲", key="flip_btn", help="Flip the board", use_container_width=True):
-            st.session_state.flip = not st.session_state.flip
+        if st.button("↩", key="undo_btn", help="Take back move",
+                     disabled=st.session_state.view <= 0, use_container_width=True):
+            st.session_state.view -= 1
+            st.session_state.pop("gameslider", None)
             st.rerun()
     with tb[6]:
-        dec = st.session_state.decode
-        at_decoded = bool(dec and dec.get("ply") == st.session_state.view
-                          and dec.get("fen") == b.fen())
-        if st.button("⌖", key="retdec", help="Return to the decoded position",
-                     disabled=dec is None or at_decoded, use_container_width=True):
-            st.session_state.view = dec["ply"]
+        if st.button("?", key="why_btn", help="Read the decode",
+                     use_container_width=True):
+            st.session_state.panel_idx = 0
             st.rerun()
-    with tb[7]:
-        with st.popover("⋮"):
-            st.code(b.fen(), language=None)
-            if st.button("Copy PGN of session", key="copypgn"):
-                st.session_state.show_pgn = True
-            if st.session_state.get("show_pgn"):
-                game = chess.pgn.Game.from_board(board_at(0))
-                node = game
-                for u in st.session_state.moves:
-                    node = node.add_variation(chess.Move.from_uci(u))
-                exp = chess.pgn.StringExporter(headers=True, variations=False, comments=False)
-                st.code(game.accept(exp), language=None)
-            if st.button("Restart position", key="restart"):
-                goto_root(st.session_state.root_fen)
-                st.rerun()
     if b.is_game_over():
         st.warning(f"Game over: {b.result()} — "
                    f"{b.outcome().termination if b.outcome() else ''}")
