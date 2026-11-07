@@ -408,6 +408,27 @@ def run_decode(bd: chess.Board):
     st.session_state.panel_idx = 0
 
 
+@st.dialog("Import game", width="large")
+def open_import_dialog():
+    st.markdown("Paste a PGN game to decode it move by move.")
+    pgn_in = st.text_area("PGN", height=180, key="pgn_in",
+                          placeholder="1. e4 e5 2. Nf3 ...")
+    if st.button("Load game", key="load_pgn", type="primary",
+                 use_container_width=True):
+        try:
+            game = chess.pgn.read_game(io.StringIO(pgn_in))
+            if game is None:
+                st.error("Could not parse PGN.")
+            else:
+                hdrs = {k: v for k, v in game.headers.items()
+                        if v not in (None, "?")}
+                goto_root(chess.STARTING_FEN,
+                          [mv.uci() for mv in game.mainline_moves()], hdrs)
+                st.rerun()
+        except Exception as e:
+            st.error(f"PGN error: {e}")
+
+
 # ---------------------------------------------------------------- sidebar (mirrors DecodeChess icon rail)
 st.markdown(theme_css(), unsafe_allow_html=True)
 with st.sidebar:
@@ -425,23 +446,9 @@ with st.sidebar:
         st.session_state.play_color = st.selectbox(
             "Engine plays", ["Black", "White"],
             index=0 if st.session_state.play_color == "Black" else 1)
-    with st.popover("⤓", help="Import a PGN game", key="sb_import",
-                     use_container_width=True):
-        st.markdown("Paste a PGN game to decode it move by move.")
-        pgn_in = st.text_area("PGN", height=100, key="pgn_in",
-                              placeholder="1. e4 e5 2. Nf3 ...")
-        if st.button("Load game", key="load_pgn", use_container_width=True):
-            try:
-                game = chess.pgn.read_game(io.StringIO(pgn_in))
-                if game is None:
-                    st.error("Could not parse PGN.")
-                else:
-                    hdrs = {k: v for k, v in game.headers.items() if v not in (None, "?")}
-                    goto_root(chess.STARTING_FEN,
-                              [mv.uci() for mv in game.mainline_moves()], hdrs)
-                    st.rerun()
-            except Exception as e:
-                st.error(f"PGN error: {e}")
+    if st.button("⤓", key="sb_import", help="Import a PGN game",
+                 use_container_width=True):
+        open_import_dialog()
     with st.popover("⚙", help="Set up a position (FEN)", key="sb_setup",
                      use_container_width=True):
         fen_in = st.text_input("FEN", value=cur().fen(), key="fen_in")
@@ -830,7 +837,7 @@ with right:
         if st.button("Analyze all moves", key="analyze_btn"):
             with st.spinner("Grading every move…"):
                 key = (st.session_state.root_fen, tuple(st.session_state.moves))
-                st.session_state.analysis[("d1",) + key] = analyze_game(
+                st.session_state.analysis[("d" + str(D),) + key] = analyze_game(
                     root, [chess.Move.from_uci(u) for u in st.session_state.moves],
                     depth=D, time_s=0.25)
             st.rerun()
