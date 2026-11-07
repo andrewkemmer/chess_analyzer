@@ -120,6 +120,8 @@ export default function App() {
     const next = [...moves.slice(0, view), uci];
     setMoves(next);
     setView(next.length);
+    // the line changed: full-game grades no longer apply to these plies
+    setRows(null);
     setPanel('decode');
   }, [moves, view]);
 
