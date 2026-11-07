@@ -461,6 +461,39 @@ def captured_rail_html(b: chess.Board) -> str:
             f"<div style='font-size:11px;font-weight:700;margin-top:4px'>{lead}</div></div>")
 
 
+def run_decode(bd: chess.Board):
+    depth = D
+    plies = st.session_state.get("plies", 7)
+    cand = engine_best_moves(bd, depth=depth, limit=5, time_s=0.6)
+    line = best_line(bd, depth=depth, plies=plies)
+    expl = explain_move(bd, cand[0][0], depth=depth) if cand else None
+    verdict = None
+    if st.session_state.view > 0:
+        before = board_at(st.session_state.view - 1)
+        try:
+            verdict = move_verdict(
+                before, chess.Move.from_uci(
+                    st.session_state.moves[st.session_state.view - 1]),
+                depth=depth)
+        except Exception:
+            verdict = None
+    searched_white = (cand[0][1] if bd.turn == chess.WHITE else -cand[0][1]) if cand else None
+    st.session_state.decode = {
+        "fen": bd.fen(), "ply": st.session_state.view,
+        "candidates": [(mv.uci(), s) for mv, s in cand],
+        "line": [(san, mv.uci(), sc) for san, mv, sc in line],
+        "expl": expl, "verdict": verdict,
+        "best_uci": cand[0][0].uci() if cand else None,
+        "assessment": position_assessment(bd, searched_white),
+    }
+    n = bd.fullmove_number
+    prefix = f"{n}. " if bd.turn == chess.WHITE else f"{n}... "
+    played = (verdict["san"] if verdict else None)
+    label = prefix + (expl["san"] if expl else "?") + (f" ({played})" if played else "")
+    st.session_state.decodes.append({"label": label, "fen": bd.fen()})
+    st.session_state.panel_idx = 0
+
+
 # ---------------------------------------------------------------- sidebar (mirrors DecodeChess icon rail)
 st.markdown(theme_css(), unsafe_allow_html=True)
 with st.sidebar:
@@ -591,39 +624,6 @@ if _dec and _dec.get("fen") == b.fen() and _dec.get("candidates"):
 else:
     eval_white = evaluate_board(b)
 
-def run_decode(bd: chess.Board):
-    depth = D
-    plies = st.session_state.get("plies", 7)
-    cand = engine_best_moves(bd, depth=depth, limit=5, time_s=0.6)
-    line = best_line(bd, depth=depth, plies=plies)
-    expl = explain_move(bd, cand[0][0], depth=depth) if cand else None
-    verdict = None
-    if st.session_state.view > 0:
-        before = board_at(st.session_state.view - 1)
-        try:
-            verdict = move_verdict(
-                before, chess.Move.from_uci(
-                    st.session_state.moves[st.session_state.view - 1]),
-                depth=depth)
-        except Exception:
-            verdict = None
-    searched_white = (cand[0][1] if bd.turn == chess.WHITE else -cand[0][1]) if cand else None
-    st.session_state.decode = {
-        "fen": bd.fen(), "ply": st.session_state.view,
-        "candidates": [(mv.uci(), s) for mv, s in cand],
-        "line": [(san, mv.uci(), sc) for san, mv, sc in line],
-        "expl": expl, "verdict": verdict,
-        "best_uci": cand[0][0].uci() if cand else None,
-        "assessment": position_assessment(bd, searched_white),
-    }
-    n = bd.fullmove_number
-    prefix = f"{n}. " if bd.turn == chess.WHITE else f"{n}... "
-    played = (verdict["san"] if verdict else None)
-    label = prefix + (expl["san"] if expl else "?") + (f" ({played})" if played else "")
-    st.session_state.decodes.append({"label": label, "fen": bd.fen()})
-    st.session_state.panel_idx = 0
-
-
 with left:
     mini, eb, bb, rail = st.columns([0.42, 0.5, 7, 1.6])
     with mini:
@@ -716,10 +716,9 @@ with left:
 
 PANELS = ["Decode", "Game", "Graph", "Move Info", "Engine", "Statistics", "Info"]
 with right:
-    choice = st.radio("Panel", PANELS, index=st.session_state.panel_idx,
-                      horizontal=True, label_visibility="collapsed")
-    st.session_state.panel_idx = PANELS.index(choice)
-    panel = choice
+    st.session_state.panel_idx = max(0, min(len(PANELS) - 1,
+                                             st.session_state.panel_idx))
+    panel = PANELS[st.session_state.panel_idx]
     root = board_at(0)
 
     if panel == "Decode":
