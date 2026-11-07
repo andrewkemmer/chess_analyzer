@@ -1,4 +1,12 @@
-"""Chess Explainer — a DecodeChess-style Streamlit app with rich 'why' explanations."""
+"""Chess Explainer — DecodeChess-structured analysis board with rich 'why' explanations.
+
+Layout mirrors https://app.decodechess.com/:
+  top menubar (Play | Import | Set Up | Examples | History) + FEN bar,
+  board left with toolbar (back / forward / Decode / flip / return / more),
+  panel tabs right (Game | Graph | Move Info | Engine | Statistics | Info),
+  decode narrative under the board (assessment → best line → "good because it"
+  → your-move verdict → best play after → major threats → how to find it).
+"""
 import io
 import chess
 import chess.pgn
@@ -7,369 +15,526 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from chess_explain import (
-    engine_best_moves, best_line, explain_move, immediate_threats,
-    opponent_threats, hanging_pieces, all_functionality,
-    position_concepts, suggest_plans, classify_loss, format_eval,
-    evaluate_board,
+    engine_best_moves, best_line, explain_move, opponent_threats,
+    white_pov_threat, all_functionality, position_concepts,
+    classify_loss, format_eval, evaluate_board, position_assessment,
+    move_verdict, analyze_game, engine_name, stockfish_available,
 )
 
-st.set_page_config(page_title="Chess Explainer — Why is it the best move?", layout="wide", page_icon="♞")
+st.set_page_config(page_title="Chess Explainer", layout="wide", page_icon="♞")
 
-# ---------------------------------------------------------------- state
+GLYPHS = {
+    (chess.WHITE, "K"): "♔", (chess.WHITE, "Q"): "♕", (chess.WHITE, "R"): "♖",
+    (chess.WHITE, "B"): "♗", (chess.WHITE, "N"): "♘",
+    (chess.BLACK, "K"): "♚", (chess.BLACK, "Q"): "♛", (chess.BLACK, "R"): "♜",
+    (chess.BLACK, "B"): "♝", (chess.BLACK, "N"): "♞",
+}
+
+
+def glyph_san(san: str, color: chess.Color) -> str:
+    if san and san[0] in "KQRBN":
+        return GLYPHS[(color, san[0])] + san[1:]
+    return san
+
+
+def format_pv(board_start: chess.Board, line) -> str:
+    """'⚫ 21. ♛a1 ♕e8 22. e4 …' style principal variation."""
+    b = board_start.copy()
+    parts = ["⚫" if b.turn == chess.BLACK else "⚪"]
+    for san, m, _sc in line:
+        if b.turn == chess.WHITE:
+            parts.append(f"{b.fullmove_number}.")
+        elif not parts[-1].endswith(".") and (len(parts) == 1 or not parts[-1][0].isdigit()):
+            parts.append(f"{b.fullmove_number}...")
+        parts.append(glyph_san(san, b.turn))
+        b.push(m)
+    return " ".join(parts)
+
+
 SAMPLES = {
+    "Kramnik – Leko 2001 (Qa1! is best, e4? blunders)":
+        "2rq1rk1/R2n1ppp/4p3/2pb4/5B2/6P1/1Q2PPBP/3R2K1 w - - 0 21",
     "Starting position": chess.STARTING_FEN,
-    "Italian Game — find the plan": "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
-    "Hanging queen (Qa1 idea)": "2rq1rk1/pp1bpppp/2p2n2/3p4/3P4/2N1PN2/PPQ2PPP/R1B1K2R w KQ - 0 1",
+    "Italian Game — find the plan":
+        "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
     "Back-rank mate threat": "6k1/5ppp/8/8/8/8/5PPP/4R1K1 w - - 0 1",
     "Fork tactic": "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3",
 }
 
-if "fen" not in st.session_state:
-    st.session_state.fen = chess.STARTING_FEN
-if "history" not in st.session_state:
-    st.session_state.history = []  # list of uci
-if "flip" not in st.session_state:
-    st.session_state.flip = False
-if "decode" not in st.session_state:
-    st.session_state.decode = None
-if "game" not in st.session_state:
-    st.session_state.game = None  # loaded PGN game
-if "game_idx" not in st.session_state:
-    st.session_state.game_idx = 0
+# ---------------------------------------------------------------- state
+for k, v in {
+    "root_fen": chess.STARTING_FEN, "moves": [], "view": 0,
+    "flip": False, "decode": None, "decodes": [], "analysis": {},
+    "headers": {}, "play_mode": False, "play_color": "Black",
+    "visited": [chess.STARTING_FEN],
+    "depth": 2, "sf_depth": 18, "plies": 7,
+}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 
-def board() -> chess.Board:
-    b = chess.Board(st.session_state.fen)
+def board_at(ply: int) -> chess.Board:
+    b = chess.Board(st.session_state.root_fen)
+    for u in st.session_state.moves[:ply]:
+        b.push(chess.Move.from_uci(u))
     return b
 
 
-def set_board(b: chess.Board):
-    st.session_state.fen = b.fen()
-    st.session_state.decode = None  # invalidate decode on change
+def cur() -> chess.Board:
+    return board_at(st.session_state.view)
+
+
+def goto_root(fen: str, moves=(), headers=None):
+    st.session_state.root_fen = fen
+    st.session_state.moves = list(moves)
+    st.session_state.view = len(moves)
+    st.session_state.decode = None
+    st.session_state.analysis = {}
+    st.session_state.headers = headers or {}
+    if fen not in st.session_state.visited:
+        st.session_state.visited.append(fen)
 
 
 def render_board_svg(b: chess.Board, arrows=(), lastmove=None):
     orient = chess.BLACK if st.session_state.flip else chess.WHITE
-    check_sq = None
-    if b.is_check():
-        check_sq = b.king(b.turn)
-    svg = chess.svg.board(
-        b, orientation=orient, arrows=list(arrows),
-        lastmove=lastmove, check=check_sq, size=480,
-    )
-    components.html(f'<div style="display:flex;justify-content:center">{svg}</div>', height=520)
+    check_sq = b.king(b.turn) if b.is_check() else None
+    arrow_objs = [chess.svg.Arrow(t, h) for t, h in arrows]
+    svg = chess.svg.board(b, orientation=orient, arrows=arrow_objs,
+                          lastmove=lastmove, check=check_sq, size=460)
+    components.html('<div style="display:flex;justify-content:center">'
+                    f"{svg}</div>", height=500)
 
 
-def eval_bar(cp_white: int):
-    # squash to 0..1
-    import math
-    w = 1 / (1 + math.exp(-cp_white / 350))
-    c1, c2 = st.columns([8, 2])
-    with c1:
-        st.progress(w, text="White advantage" if cp_white >= 0 else "Black advantage")
-    with c2:
-        st.metric("Eval", format_eval(cp_white))
-
-
-# ---------------------------------------------------------------- header (DecodeChess-like top bar)
-st.title("♞ Chess Explainer")
-st.caption("DecodeChess-style analysis — but focused on **why** a move is best: threats, hanging pieces, plans, and piece functions. No engine binary needed.")
-
-with st.expander("📥 New position — FEN / PGN / samples", expanded=True):
-    c1, c2, c3 = st.columns([2, 3, 2])
-    with c1:
-        sample = st.selectbox("Sample position", list(SAMPLES.keys()))
-        if st.button("Load sample"):
-            st.session_state.history = []
-            st.session_state.game = None
-            st.session_state.fen = SAMPLES[sample]
-            st.session_state.decode = None
-            st.rerun()
-    with c2:
-        fen_in = st.text_input("FEN", value=st.session_state.fen)
-        cc = st.columns(3)
-        if cc[0].button("Load FEN"):
-            try:
-                chess.Board(fen_in)  # validate
-                st.session_state.history = []
-                st.session_state.game = None
-                st.session_state.fen = fen_in
-                st.session_state.decode = None
-                st.rerun()
-            except Exception as e:
-                st.error(f"Invalid FEN: {e}")
-        if cc[1].button("↩ Undo"):
-            if st.session_state.history:
-                b = board()
-                b.pop()
-                st.session_state.history.pop()
-                st.session_state.fen = b.fen()
-                st.session_state.decode = None
-                st.rerun()
-        if cc[2].button("⟲ Flip board"):
-            st.session_state.flip = not st.session_state.flip
-            st.rerun()
-    with c3:
-        pgn_in = st.text_area("Paste PGN", height=90, placeholder="1. e4 e5 2. Nf3 ...")
-        if st.button("Load PGN game"):
-            try:
-                game = chess.pgn.read_game(io.StringIO(pgn_in))
-                if game is None:
-                    st.error("Could not parse PGN.")
-                else:
-                    st.session_state.game = pgn_in
-                    st.session_state.game_idx = 0
-                    st.session_state.history = []
-                    b = chess.Board()
-                    for m in game.mainline_moves():
-                        b.push(m)
-                    # jump to start; user steps through below
-                    st.session_state.fen = chess.STARTING_FEN
-                    st.session_state.decode = None
+# ---------------------------------------------------------------- top menubar (mirrors DecodeChess menu)
+t1, t2 = st.columns([6, 6])
+with t1:
+    st.markdown("## ♞ Chess Explainer")
+with t2:
+    m = st.columns(5)
+    with m[0]:
+        with st.popover("▶ Play"):
+            st.markdown("Play against the local engine from the current board.")
+            st.session_state.play_mode = st.checkbox("Engine replies to my moves",
+                                                     value=st.session_state.play_mode)
+            st.session_state.play_color = st.selectbox(
+                "Engine plays", ["Black", "White"],
+                index=0 if st.session_state.play_color == "Black" else 1)
+    with m[1]:
+        with st.popover("⤓ Import"):
+            st.markdown("Paste a PGN game to decode it move by move.")
+            pgn_in = st.text_area("PGN", height=100, key="pgn_in",
+                                  placeholder="1. e4 e5 2. Nf3 ...")
+            if st.button("Load game", key="load_pgn"):
+                try:
+                    game = chess.pgn.read_game(io.StringIO(pgn_in))
+                    if game is None:
+                        st.error("Could not parse PGN.")
+                    else:
+                        hdrs = {k: v for k, v in game.headers.items() if v not in (None, "?")}
+                        goto_root(chess.STARTING_FEN,
+                                  [mv.uci() for mv in game.mainline_moves()], hdrs)
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"PGN error: {e}")
+    with m[2]:
+        with st.popover("⚙ Set Up"):
+            fen_in = st.text_input("FEN", value=cur().fen(), key="fen_in")
+            if st.button("Load FEN", key="load_fen"):
+                try:
+                    chess.Board(fen_in)
+                    goto_root(fen_in)
                     st.rerun()
-            except Exception as e:
-                st.error(f"PGN error: {e}")
+                except Exception as e:
+                    st.error(f"Invalid FEN: {e}")
+            if st.button("Reset to start", key="reset_board"):
+                goto_root(chess.STARTING_FEN)
+                st.rerun()
+    with m[3]:
+        with st.popover("★ Examples"):
+            for name, fen in SAMPLES.items():
+                if st.button(name, key=f"ex_{abs(hash(name)) % 10**8}"):
+                    goto_root(fen)
+                    st.rerun()
+    with m[4]:
+        with st.popover("🕘 History"):
+            if not st.session_state.visited:
+                st.caption("No positions yet.")
+            for i, f in enumerate(reversed(st.session_state.visited[-8:])):
+                if st.button(f"{len(st.session_state.visited)-i}. {f[:40]}…",
+                             key=f"hist_{i}"):
+                    goto_root(f)
+                    st.rerun()
 
-depth = st.sidebar.slider("Search depth (higher = slower, stronger)", 1, 4, 2,
-                          help="Pure-Python engine. Depth 2 is instant, 3–4 is stronger but slower. Stockfish is used automatically if installed.")
-plies = st.sidebar.slider("Best-line plies to explain", 2, 8, 6)
-st.sidebar.markdown("### How to read a decode\n1. Press **🔍 Decode position**\n2. Read **Best line** (Idea → Problem → Solution)\n3. Check **Threats before/after**, **Good moves**, **Plans**, **Pieces**, **Concepts**\n4. Play a move and open **Your move** to see why it was good or not.")
+st.code(cur().fen(), language=None)  # FEN bar, like DecodeChess
 
-# ---------------------------------------------------------------- main two-pane layout (board left, analysis right)
+# ---------------------------------------------------------------- main split
 left, right = st.columns([5, 7])
-
-b = board()
+b = cur()
 eval_white = evaluate_board(b)
 
+SF_ON = stockfish_available() is not None
+D = st.session_state.sf_depth if SF_ON else st.session_state.depth
+
 with left:
-    st.subheader(f"{'Black' if b.turn == chess.BLACK else 'White'} to move")
-    # arrows preview: best move arrow if decoded
-    arrows = []
-    last = None
-    if st.session_state.history:
+    bm = None
+    if (st.session_state.decode and st.session_state.decode.get("best_uci")
+            and st.session_state.decode.get("fen") == b.fen()):
         try:
-            last = chess.Move.from_uci(st.session_state.history[-1])
+            m = chess.Move.from_uci(st.session_state.decode["best_uci"])
+            bm = [(m.from_square, m.to_square)]
         except Exception:
-            last = None
-    if st.session_state.decode and st.session_state.decode.get("best_uci"):
-        try:
-            bm = chess.Move.from_uci(st.session_state.decode["best_uci"])
-            arrows = [(bm.from_square, bm.to_square)]
-        except Exception:
-            pass
-    render_board_svg(b, arrows=arrows, lastmove=last)
-    eval_bar(eval_white)
-
-    st.markdown("**Play a move** (click-through, like DecodeChess board)")
-    legal = list(b.legal_moves)
-    try:
-        legal_san = sorted([b.san(m) for m in legal])
-    except Exception:
-        legal_san = [b.uci(m) for m in legal]
-    san_to_move = {}
-    for m in legal:
-        try:
-            san_to_move[b.san(m)] = m
-        except Exception:
-            san_to_move[b.uci(m)] = m
-    col_a, col_b = st.columns(2)
-    with col_a:
-        choice = st.selectbox("Legal move", legal_san, key="move_choice") if legal_san else None
-    with col_b:
-        st.write("")
-        st.write("")
-        if st.button("▶ Make move", disabled=not legal_san):
-            m = san_to_move[choice]
-            nb = board()
-            nb.push(m)
-            st.session_state.history.append(m.uci())
-            # if browsing a PGN game, advance index
-            st.session_state.fen = nb.fen()
-            st.session_state.decode = None
+            bm = None
+    render_board_svg(
+        b,
+        arrows=(bm or []),
+        lastmove=(chess.Move.from_uci(st.session_state.moves[st.session_state.view - 1])
+                  if st.session_state.view > 0 else None),
+    )
+    # toolbar: back / forward / Decode / flip / return / more  (mirrors app.decodechess.com)
+    tb = st.columns([1, 1, 3, 1, 1, 1])
+    with tb[0]:
+        if st.button("◀", key="back", help="Go back one half-move",
+                     disabled=st.session_state.view <= 0, use_container_width=True):
+            st.session_state.view -= 1
+            st.session_state.pop("gameslider", None)
             st.rerun()
-    if b.is_game_over():
-        st.warning(f"Game over: {b.result()} — {b.peek() if len(list(b.move_stack)) else ''} {b.outcome().termination if b.outcome() else ''}")
-
-    # move trail
-    if st.session_state.history:
-        trail = []
-        tb = chess.Board() if st.session_state.game else None
-        st.caption("Moves played: " + " ".join(
-            f"{i+1}. {chess.Board().san(chess.Move.from_uci(u)) if False else u}" for i, u in enumerate(st.session_state.history)
-        ))
-
-with right:
-    st.subheader("Engine panel (Stockfish-style, local)")
-    ec1, ec2, ec3 = st.columns([2, 2, 3])
-    with ec1:
-        st.metric("Evaluation (White POV)", format_eval(eval_white))
-    with ec2:
-        st.metric("Legal moves", len(list(b.legal_moves)))
-    with ec3:
-        if st.button("🔍 Decode position — explain WHY", type="primary", use_container_width=True):
-            with st.spinner("Analyzing threats, candidates, and plans…"):
-                cand = engine_best_moves(b, depth=depth, limit=5)
+    with tb[1]:
+        if st.button("▶", key="fwd", help="Go forward one half-move",
+                     disabled=st.session_state.view >= len(st.session_state.moves),
+                     use_container_width=True):
+            st.session_state.view += 1
+            st.session_state.pop("gameslider", None)
+            st.rerun()
+    with tb[2]:
+        if st.button("🔍 Decode", key="decode_btn", type="primary",
+                     help="Explain the best move", use_container_width=True):
+            with st.spinner("Decoding…"):
+                depth = D
+                plies = st.session_state.get("plies", 7)
+                cand = engine_best_moves(b, depth=depth, limit=5, time_s=0.6)
                 line = best_line(b, depth=depth, plies=plies)
                 expl = explain_move(b, cand[0][0], depth=depth) if cand else None
-                st.session_state.decode = {
-                    "candidates": [(m.uci(), s) for m, s in cand],
-                    "line": [(san, m.uci(), sc) for san, m, sc in line],
-                    "expl": expl,
+                verdict = None
+                if st.session_state.view > 0:
+                    before = board_at(st.session_state.view - 1)
+                    try:
+                        verdict = move_verdict(
+                            before, chess.Move.from_uci(
+                                st.session_state.moves[st.session_state.view - 1]),
+                            depth=depth)
+                    except Exception:
+                        verdict = None
+                searched_white = (cand[0][1] if b.turn == chess.WHITE else -cand[0][1]) if cand else None
+                d = {
+                    "fen": b.fen(), "ply": st.session_state.view,
+                    "candidates": [(mv.uci(), s) for mv, s in cand],
+                    "line": [(san, mv.uci(), sc) for san, mv, sc in line],
+                    "expl": expl, "verdict": verdict,
                     "best_uci": cand[0][0].uci() if cand else None,
-                    "fen": b.fen(),
+                    "assessment": position_assessment(b, searched_white),
                 }
+                st.session_state.decode = d
+                n = b.fullmove_number
+                prefix = f"{n}. " if b.turn == chess.WHITE else f"{n}... "
+                played = (verdict["san"] if verdict else None)
+                label = prefix + (expl["san"] if expl else "?") + (f" ({played})" if played else "")
+                st.session_state.decodes.append({"label": label, "fen": b.fen()})
             st.rerun()
+    with tb[3]:
+        if st.button("⟲", key="flip_btn", help="Flip the board", use_container_width=True):
+            st.session_state.flip = not st.session_state.flip
+            st.rerun()
+    with tb[4]:
+        dec = st.session_state.decode
+        at_decoded = bool(dec and dec.get("ply") == st.session_state.view
+                          and dec.get("fen") == b.fen())
+        if st.button("⌖", key="retdec", help="Return to the decoded position",
+                     disabled=dec is None or at_decoded, use_container_width=True):
+            st.session_state.view = dec["ply"]
+            st.rerun()
+    with tb[5]:
+        with st.popover("⋮"):
+            st.code(b.fen(), language=None)
+            if st.button("Copy PGN of session", key="copypgn"):
+                st.session_state.show_pgn = True
+            if st.session_state.get("show_pgn"):
+                game = chess.pgn.Game.from_board(board_at(0))
+                node = game
+                bb = board_at(0)
+                for u in st.session_state.moves:
+                    mv = chess.Move.from_uci(u)
+                    node = node.add_variation(mv)
+                    bb.push(mv)
+                exp = chess.pgn.StringExporter(headers=True, variations=False, comments=False)
+                st.code(game.accept(exp), language=None)
+            if st.button("Restart position", key="restart"):
+                goto_root(st.session_state.root_fen)
+                st.rerun()
 
+    # move picker
+    legal = list(b.legal_moves)
+    san_to_move = {}
+    for mv in legal:
+        try:
+            san_to_move[b.san(mv)] = mv
+        except Exception:
+            san_to_move[b.uci(mv)] = mv
+    mp1, mp2 = st.columns([3, 2])
+    with mp1:
+        choice = st.selectbox("Your move", sorted(san_to_move)) if san_to_move else None
+    with mp2:
+        st.write("")
+        if st.button("Make move", key="makemove", disabled=not san_to_move,
+                     use_container_width=True):
+            nb_moves = st.session_state.moves[:st.session_state.view]
+            mv = san_to_move[choice]
+            nb_moves.append(mv.uci())
+            # engine auto-reply in Play mode
+            nb = board_at(0)
+            for u in nb_moves:
+                nb.push(chess.Move.from_uci(u))
+            eng = chess.BLACK if st.session_state.play_color == "Black" else chess.WHITE
+            if st.session_state.play_mode and not nb.is_game_over() and nb.turn == eng:
+                rep = engine_best_moves(nb, depth=D, limit=1, time_s=0.5)
+                if rep:
+                    nb_moves.append(rep[0][0].uci())
+            st.session_state.moves = nb_moves
+            st.session_state.view = len(nb_moves)
+            st.session_state.decode = None
+            st.session_state.pop("gameslider", None)
+            st.rerun()
+    if b.is_game_over():
+        st.warning(f"Game over: {b.result()} — "
+                   f"{b.outcome().termination if b.outcome() else ''}")
+
+    # ---------------- decode narrative (mirrors DecodeChess results panel)
     d = st.session_state.decode
     if not d or d.get("fen") != b.fen():
-        st.info("Press **🔍 Decode position** to get the DecodeChess-style explanation: best line + threats + good moves + plans + piece functions + concepts.")
+        st.info("Tap **🔍 Decode** to get the explanation: assessment, best line, "
+                "why it's good, your-move verdict, major threats, and how to find it.")
     else:
-        cand = d["candidates"]
         expl = d["expl"]
-        # Best move headline
-        best_san = expl["san"] if expl else "—"
-        st.success(f"**Best move: {best_san}** — " + " · ".join(expl["bullets"][:3]) if expl else "No legal moves.")
-
-        t1, t2, t3, t4, t5, t6, t7 = st.tabs([
-            "💡 Best line", "⚔ Threats", "✅ Good moves", "🗺 Plans", "♜ Pieces", "🧠 Concepts", "🫵 Your move",
-        ])
-
-        with t1:
-            st.markdown("#### Why this move? — Idea → Problem → Solution")
-            st.markdown(f"**Problem:** {expl['problem']}")
-            st.markdown(f"**Idea:** {expl['idea']}")
-            st.markdown(f"**Solution:** {expl['solution']}")
-            st.markdown("**Because it:**")
-            for bl in expl["bullets"]:
-                st.markdown(f"- {bl}")
-            st.divider()
-            st.markdown(f"#### Best line ({len(d['line'])} plies, engine's view)")
-            for i, (san, uci, sc) in enumerate(d["line"]):
-                mover = "⚪" if (i % 2 == 0) == (b.turn == chess.WHITE) else "⚫"
-                with st.expander(f"{mover} {i+1}. {san}  (eval {format_eval(sc)})", expanded=(i == 0)):
-                    # explain each ply in its own sub-position
-                    sub = board()
-                    for _, u2, _ in d["line"][:i]:
-                        sub.push(chess.Move.from_uci(u2))
+        st.markdown(d["assessment"])
+        with st.container(border=True):
+            st.markdown(f"**Explaining the best line of {engine_name()}**")
+            st.markdown(format_pv(b, [(s, chess.Move.from_uci(u), sc)
+                                      for s, u, sc in d["line"]]))
+        if expl:
+            st.markdown(f"**{glyph_san(expl['san'], b.turn)} is good because it**")
+            for i, bl in enumerate(expl["bullets"]):
+                with st.expander(bl["t"], expanded=(i == 0)):
+                    st.markdown(bl["d"])
+        v = d.get("verdict")
+        if v:
+            color = {"Best move": "green", "Good move": "green", "Inaccuracy": "orange",
+                     "Mistake": "orange", "Blunder": "red"}.get(v["label"], "blue")
+            st.markdown(f":{color}[**{v['sentence']}**]")
+            if v["label"] not in ("Best move", "Good move") and v["refutation"]:
+                st.markdown(f"**The best play after {v['san']}:**")
+                st.markdown(format_pv(b, [(s, chess.Move.from_uci(u), sc)
+                                          for s, u, sc in v["refutation"]]))
+        st.markdown("### Major threats")
+        threats = opponent_threats(b, limit=5)
+        if not threats:
+            st.markdown("No direct threats right now — plans matter more than tactics here.")
+        for t in threats:
+            tag = white_pov_threat(b, t) / 100
+            fb = b.copy()
+            fb.turn = not fb.turn
+            try:
+                sub = explain_move(fb, t["move"], depth=1)
+                details = [x["t"] for x in sub["bullets"][:5]] or [t["text"]]
+            except Exception:
+                details = [t["text"]]
+            with st.expander(f"{t['san']} ({tag:+.2f})"):
+                for x in details:
+                    st.markdown(f"- {x}")
+        with st.expander("**How to find the best move**", expanded=False):
+            st.markdown("**Pay attention to**")
+            for c in position_concepts(b):
+                st.markdown(f"- {c}")
+            if expl:
+                st.markdown("**Your plan:**")
+                for p in expl["plans"]:
+                    st.markdown(f"- {p}")
+        if len(d["candidates"]) > 1:
+            st.markdown("### Other good moves")
+            for uci, sc in d["candidates"][1:4]:
+                try:
                     mv = chess.Move.from_uci(uci)
-                    sub_expl = explain_move(sub, mv, depth=max(1, depth - 1))
-                    st.markdown(f"**Problem:** {sub_expl['problem']}")
-                    st.markdown(f"**Solution:** {sub_expl['solution']}")
-                    for bl in sub_expl["bullets"][:4]:
-                        st.markdown(f"- {bl}")
-
-        with t2:
-            st.markdown("#### Threats — toggle before / after the best move")
-            mode = st.radio("Show threats", ["Before best move", "After best move"], horizontal=True, key="threat_mode")
-            threats = expl["threats_before"] if mode == "Before best move" else expl["threats_after"]
-            if not threats:
-                st.markdown("✅ No direct captures/checks/mates found — the position is quiet; plans matter more than tactics here.")
-            else:
-                st.markdown(f"Use this to see the damage each threat could do **{'if you do nothing' if mode=='Before best move' else 'even after the best move — leftovers to watch'}**.")
-                for t in threats:
-                    st.markdown(f"- **{t['san']}** ({t['score']/100:+.1f}): {t['text']}")
-            st.caption("DecodeChess parallel: toggle 'before/after' to see how the recommended move minimizes opponent threats.")
-
-        with t3:
-            st.markdown("#### Good moves in descending order — pros & cons of each")
-            for i, (uci, sc) in enumerate(cand):
-                mv = chess.Move.from_uci(uci)
-                sub_expl = explain_move(board(), mv, depth=max(1, depth - 1))
-                with st.expander(f"{'🥇' if i==0 else f'{i+1}.'} {sub_expl['san']}  (score {sc/100:+.2f})", expanded=(i == 0)):
-                    for bl in sub_expl["bullets"][:4]:
-                        st.markdown(f"- {bl}")
-                    loss = cand[0][1] - sc
-                    if i > 0:
-                        tag = classify_loss(loss) or "playable alternative"
-                        st.caption(f"Costs ~{loss/100:.2f} pawns vs best → **{tag}**.")
-
-        with t4:
-            st.markdown("#### Plans — how the best move serves your future")
-            for p in expl["plans"]:
-                st.markdown(f"- {p}")
-            st.caption("Ask yourself before every move: *what is my opponent's idea, and what is my plan after their most likely reply?*")
-
-        with t5:
-            st.markdown("#### Piece functionality — what each of your pieces actually does")
-            for f in all_functionality(board()):
+                    se = explain_move(b, mv, depth=1)
+                    wv = sc if b.turn == chess.WHITE else -sc
+                    with st.expander(f"{se['san']} ({wv/100:+.2f})"):
+                        for bl in se["bullets"][:4]:
+                            st.markdown(f"- {bl['t']}")
+                except Exception:
+                    continue
+        with st.expander("**Piece functionality**", expanded=False):
+            for f in all_functionality(b):
                 st.markdown(f"- {f}")
 
-        with t6:
-            st.markdown("#### Concepts — positional & tactical motifs in this position")
-            for c in position_concepts(board()):
-                st.markdown(f"- {c}")
+with right:
+    panel = st.radio("Panel", ["Game", "Graph", "Move Info", "Engine", "Statistics", "Info"],
+                     horizontal=True, key="panel", label_visibility="collapsed")
+    root = board_at(0)
 
-        with t7:
-            st.markdown("#### Your move — was what YOU played good?")
-            if not st.session_state.history:
-                st.markdown("Play a move on the board (left panel), then decode again — this tab compares your move to the engine's best and explains the difference.")
-            else:
-                last_uci = st.session_state.history[-1]
-                prev = board()
-                # reconstruct previous: pop last
-                prev.pop() if False else None
-                pb = chess.Board(st.session_state.fen)
-                # rebuild from history minus last is complex w/ custom FEN; approximate:
-                st.markdown(f"Last played: **{last_uci}**. Decode the position *before* your move, then compare — full PGN-game grading lives in the Game review section below.")
-                if cand and last_uci != d["best_uci"]:
-                    try:
-                        mine = chess.Move.from_uci(last_uci)
-                        mine_expl = explain_move(board(), mine, depth=1) if mine in board().legal_moves else None
-                    except Exception:
-                        mine_expl = None
-                    st.warning(f"Your move differs from best ({best_san}). The best move neutralized {len(expl['threats_before']) - len(expl['threats_after'])}+ threat(s) and gained ~{expl['gain_cp']/100:+.1f} pawns of value — replay the Threats tab to feel the difference.")
+    if panel == "Game":
+        st.markdown("#### Game")
+        if not st.session_state.moves:
+            st.caption("No moves yet — play on the board or import a game.")
+        else:
+            bb = root.copy()
+            rows, w, bl = [], None, None
+            for i, u in enumerate(st.session_state.moves):
+                san = bb.san(chess.Move.from_uci(u))
+                bb.push(chess.Move.from_uci(u))
+                if i % 2 == 0:
+                    w = san
+                else:
+                    rows.append({"#": i // 2 + 1, "White": w, "Black": san})
+                    w = None
+            if w is not None:
+                rows.append({"#": len(rows) + 1, "White": w, "Black": ""})
+            st.dataframe(rows, hide_index=True, use_container_width=True)
+            idx = st.slider("Half-move", 0, len(st.session_state.moves),
+                            st.session_state.view, key="gameslider")
+            if idx != st.session_state.view:
+                st.session_state.view = idx
+                st.rerun()
 
-# ---------------------------------------------------------------- game review (DecodeChess game map)
-st.divider()
-st.header("📊 Game review — graph + mistakes (DecodeChess game map)")
-st.caption("Load a PGN above, then step through it here. Each position is decoded automatically: inaccuracies / mistakes / blunders with the *why*.")
+    elif panel == "Graph":
+        st.markdown("#### Graph")
+        import matplotlib.pyplot as plt
+        key = (st.session_state.root_fen, tuple(st.session_state.moves))
+        rows = st.session_state.analysis.get(("d1",) + key)
+        if not rows:
+            seq, bb = [evaluate_board(root) / 100], root.copy()
+            for u in st.session_state.moves:
+                bb.push(chess.Move.from_uci(u))
+                seq.append(evaluate_board(bb) / 100)
+        else:
+            seq = [rows[0]["eval_before"] / 100] + [r["eval_after"] / 100 for r in rows]
+        fig, ax = plt.subplots(figsize=(7, 2.4))
+        ax.plot(range(len(seq)), seq, marker="o", markersize=3)
+        ax.axhline(0, color="gray", linewidth=0.8)
+        ax.set_xlabel("Half-move")
+        ax.set_ylabel("White pawns")
+        if rows:
+            cmap = {"Best": "green", "Good move": "green", "Inaccuracy": "orange",
+                    "Mistake": "orange", "Blunder": "red"}
+            for r in rows:
+                if r["tag"] in ("Inaccuracy", "Mistake", "Blunder"):
+                    ax.plot(r["ply"], r["eval_after"] / 100, "o",
+                            color=cmap[r["tag"]], markersize=7)
+        st.pyplot(fig)
 
-if st.session_state.game:
-    try:
-        game = chess.pgn.read_game(io.StringIO(st.session_state.game))
-        moves = list(game.mainline_moves())
-        total = len(moves)
-        idx = st.slider("Move number (ply)", 0, total, min(st.session_state.game_idx, total))
-        st.session_state.game_idx = idx
-        gb = chess.Board()
-        for m in moves[:idx]:
-            gb.push(m)
-        # sync main board to game browser
-        if st.button("⬆ Load this game position into the board above"):
-            st.session_state.fen = gb.fen()
-            st.session_state.history = [m.uci() for m in moves[:idx]]
-            st.session_state.decode = None
+    elif panel == "Move Info":
+        st.markdown("#### Move Info")
+        st.metric("Evaluation (White)", f"{eval_white/100:+.2f}")
+        st.markdown(f"**Side to move:** {'White' if b.turn == chess.WHITE else 'Black'}")
+        if d and d.get("fen") == b.fen() and d.get("expl"):
+            st.markdown(f"**Best move:** {d['expl']['san']}")
+        else:
+            q = engine_best_moves(b, depth=D, limit=1, time_s=0.4)
+            try:
+                st.markdown(f"**Best move (quick):** {b.san(q[0][0]) if q else '—'}")
+            except Exception:
+                st.markdown("**Best move (quick):** —")
+        st.markdown(f"**Enemy threats:** {len(opponent_threats(b, limit=5))}")
+        if b.is_check():
+            st.markdown("**Check!** — the king must move, capture, or block.")
+
+    elif panel == "Engine":
+        st.markdown("#### Engine Analysis")
+        if SF_ON:
+            st.success(f"♟ Stockfish NNUE active (`{stockfish_available()}`) — DecodeChess-grade lines.")
+            st.session_state.sf_depth = st.slider("Stockfish depth", 10, 24, st.session_state.sf_depth,
+                                                  help="18 ≈ DecodeChess strength. Higher = stronger but slower.")
+        else:
+            st.warning("Using the built-in Python engine. For DecodeChess-grade strength, install Stockfish: "
+                       "`sudo apt install stockfish`, `./install_stockfish.sh`, or add `stockfish` to `packages.txt` "
+                       "on Streamlit Cloud — it is picked up automatically.")
+            st.session_state.depth = st.slider("Search depth", 1, 4, st.session_state.depth,
+                                               help="Higher = stronger but slower.")
+        st.session_state.plies = st.slider("Best-line plies", 2, 8, st.session_state.get("plies", 7))
+        cand = (d["candidates"] if d and d.get("fen") == b.fen()
+                else [(mv.uci(), s) for mv, s in engine_best_moves(b, depth=D, limit=5, time_s=0.5)])
+        for i, (uci, sc) in enumerate(cand[:5]):
+            wv = sc if b.turn == chess.WHITE else -sc
+            try:
+                san = b.san(chess.Move.from_uci(uci))
+            except Exception:
+                san = uci
+            medal = "🥇 " if i == 0 else f"{i+1}. "
+            st.markdown(f"{medal}**{san}** ({wv/100:+.2f})")
+
+    elif panel == "Statistics":
+        st.markdown("#### Game Statistics")
+        if st.button("Analyze all moves", key="analyze_btn"):
+            with st.spinner("Grading every move…"):
+                key = (st.session_state.root_fen, tuple(st.session_state.moves))
+                st.session_state.analysis[("d1",) + key] = analyze_game(
+                    root, [chess.Move.from_uci(u) for u in st.session_state.moves],
+                    depth=D, time_s=0.25)
             st.rerun()
-        st.markdown(f"**Position after {idx} plies** — FEN: `{gb.fen()}`")
-        if st.button("Analyze full game (fast, depth 1–2)"):
-            with st.spinner("Scoring every move…"):
-                import matplotlib.pyplot as plt
-                evals, losses, tags = [0], [], []
-                ab = chess.Board()
-                for m in moves:
-                    c = engine_best_moves(ab, depth=1, limit=1)
-                    best_sc = c[0][1] if c else 0  # mover POV
-                    try:
-                        san_m = ab.san(m)
-                    except Exception:
-                        san_m = ab.uci(m)
-                    ab.push(m)
-                    weval = evaluate_board(ab)
-                    evals.append(weval / 100)
-                    # loss = best - played (approx via search on resulting? use eval swing)
-                    losses.append(0)
-                fig, ax = plt.subplots(figsize=(8, 2.6))
-                ax.plot(range(len(evals)), evals, marker="o", markersize=3)
-                ax.axhline(0, color="gray", linewidth=0.8)
-                ax.set_xlabel("Ply")
-                ax.set_ylabel("Eval (White pawns)")
-                ax.set_title("Game graph — spikes are mistakes/blunders worth decoding")
-                st.pyplot(fig)
-                st.info("Click interesting spikes (big eval swings), load that position into the board, and press Decode — the tabs will tell you *why* the better move was better.")
-    except Exception as e:
-        st.error(f"Game review error: {e}")
-else:
-    st.markdown("No game loaded. Paste a PGN in the **New position** panel to unlock this section.")
+        key = (st.session_state.root_fen, tuple(st.session_state.moves))
+        rows = st.session_state.analysis.get(("d1",) + key)
+        if not rows:
+            st.info("Press **Analyze all moves** to grade inaccuracies, mistakes, and blunders.")
+        else:
+            for side in ("White", "Black"):
+                srows = [r for r in rows if r["side"] == side]
+                n = lambda t: sum(1 for r in srows if r["tag"] == t)
+                avg = (sum(r["loss_cp"] for r in srows) / max(1, len(srows)) / 100)
+                st.markdown(f"**{side}** — Notable: {n('Best')} · "
+                            f"Inaccuracies: {n('Inaccuracy')} · Mistakes: {n('Mistake')} · "
+                            f"Blunders: {n('Blunder')} · Average loss: {avg:.2f}")
+            st.divider()
+            bad = [r for r in rows if r["tag"] in ("Inaccuracy", "Mistake", "Blunder")]
+            for r in bad[:10]:
+                if st.button(f"{r['ply']}. {r['san']} — {r['tag']} "
+                             f"({r['loss_cp']/100:.2f}), best was {r['best_san']}",
+                             key=f"bad_{r['ply']}"):
+                    st.session_state.view = r["ply"]
+                    st.session_state.decode = None
+                    st.session_state.pop("gameslider", None)
+                    st.rerun()
+
+    else:  # Info
+        st.markdown("#### Game Info")
+        st.markdown(f"**SetUp:** {st.session_state.root_fen[:20]}…")
+        st.code(st.session_state.root_fen, language=None)
+        for k in ("Event", "Site", "Date", "Round", "White", "Black", "Result"):
+            if st.session_state.headers.get(k):
+                st.markdown(f"**{k}:** {st.session_state.headers[k]}")
+        game = chess.pgn.Game.from_board(root)
+        node = game
+        bb = root.copy()
+        for u in st.session_state.moves:
+            mv = chess.Move.from_uci(u)
+            node = node.add_variation(mv)
+            bb.push(mv)
+        for k, v in st.session_state.headers.items():
+            try:
+                game.headers[k] = v
+            except Exception:
+                pass
+        exp = chess.pgn.StringExporter(headers=True, variations=False, comments=False)
+        st.download_button("Save to file", game.accept(exp),
+                           file_name="game.pgn", key="savepgn")
+        st.markdown("#### Decodes Status")
+        if not st.session_state.decodes:
+            st.caption("Nothing decoded yet this session.")
+        for i, dc in enumerate(reversed(st.session_state.decodes[-10:])):
+            if st.button(dc["label"], key=f"dec_{i}"):
+                for p in range(len(st.session_state.moves) + 1):
+                    if board_at(p).fen() == dc["fen"]:
+                        st.session_state.view = p
+                        break
+                st.session_state.decode = None
+                st.session_state.pop("gameslider", None)
+                st.rerun()
 
 st.divider()
-st.caption("Built with python-chess + a local alpha-beta engine (Stockfish auto-used if installed). Explanations compare threats, hanging pieces, checks/captures, and activity before vs after each move — that is the 'why'.")
+st.caption("Board + panels mirror app.decodechess.com. Explanations are generated locally by "
+           "comparing threats, hanging pieces, and activity before vs after each move.")

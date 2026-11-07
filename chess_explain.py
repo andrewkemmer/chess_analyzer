@@ -237,41 +237,72 @@ def stockfish_available() -> str | None:
 
 
 def engine_best_moves(board: chess.Board, depth: int = 2, limit: int = 5, time_s: float = 0.4):
-    """Prefer Stockfish when installed, else pure-python search."""
+    """Prefer Stockfish when installed, else pure-python search.
+
+    `depth` is the engine search depth: 1-4 is the pure-python scale, while
+    10-24 is the recommended Stockfish scale (18 ≈ DecodeChess-grade lines).
+    Scores are centipawns from the side-to-move's perspective (mate ≈ ±100000).
+    """
     sf = stockfish_available()
     if sf:
         try:
             import chess.engine
+            d = min(max(int(depth), 1), 30)
             with chess.engine.SimpleEngine.popen_uci(sf) as eng:
-                # keep it snappy for Streamlit
-                result = eng.play(board, chess.engine.Limit(depth=min(max(depth, 8), 16), time=time_s))
-                best = result.move
-                info = eng.analyse(board, chess.engine.Limit(depth=min(max(depth, 10), 16), time=time_s), multipv=min(limit, 3))
+                info = eng.analyse(board, chess.engine.Limit(depth=d, time=time_s),
+                                   multipv=min(max(int(limit), 1), 5))
                 out = []
                 for pv in info:
-                    mv = pv["pv"][0] if pv.get("pv") else best
-                    sc = pv["score"].pov(board.turn).score(mate_score=10000)
-                    out.append((mv, int(sc or 0)))
-                # dedupe, best first
+                    if not pv.get("pv"):
+                        continue
+                    sc = pv["score"].pov(board.turn).score(mate_score=100000)
+                    out.append((pv["pv"][0], int(sc if sc is not None else 0)))
                 seen, dedup = set(), []
                 for mv, sc in out:
                     if mv not in seen:
                         seen.add(mv)
                         dedup.append((mv, sc))
-                return dedup or ([(best, 0)] if best else [])
+                if dedup:
+                    return dedup
+                result = eng.play(board, chess.engine.Limit(depth=d, time=time_s))
+                return [(result.move, 0)] if result.move else []
         except Exception:
             pass
     return search_moves(board, depth=depth, limit=limit)
 
 
-def best_line(board: chess.Board, depth: int = 2, plies: int = 6):
+def _sf_move_value(board: chess.Board, move: chess.Move, depth: int, time_s: float) -> int | None:
+    """Score `move` with Stockfish (mover POV). None if unavailable/failed."""
+    sf = stockfish_available()
+    if not sf:
+        return None
+    try:
+        import chess.engine
+        d = min(max(int(depth), 1), 30)
+        b = board.copy()
+        b.push(move)
+        if b.is_checkmate():
+            return 100000 + d
+        if b.is_game_over():
+            return 0
+        with chess.engine.SimpleEngine.popen_uci(sf) as eng:
+            info = eng.analyse(b, chess.engine.Limit(depth=d, time=time_s))
+            sc = info["score"].pov(b.turn).score(mate_score=100000)
+            if sc is None:
+                return None
+            return -int(sc)  # back to mover's perspective
+    except Exception:
+        return None
+
+
+def best_line(board: chess.Board, depth: int = 2, plies: int = 6, time_s: float = 0.4):
     """Principal variation: list of (san, move, score_after_move_cp_white_pov)."""
     line = []
     b = board.copy()
     for _ in range(plies):
         if b.is_game_over():
             break
-        moves = engine_best_moves(b, depth=depth, limit=1)
+        moves = engine_best_moves(b, depth=depth, limit=1, time_s=time_s)
         if not moves:
             break
         m, _ = moves[0]
@@ -510,18 +541,22 @@ def explain_move(board: chess.Board, move: chess.Move, depth: int = 2) -> dict:
     opp_after = opponent_threats(after)
     neutralized = max(0, len(opp_before) - len(opp_after))
 
-    bullets = []
+    bullets: list[tuple[str, str]] = []  # (headline, "..." elaboration)
     # 1. escape / unsupported
-    if move.from_square in [chess.parse_square(s) for s in before_hang if before_hang[s]["loose"]] if False else []:
-        pass
-    fh = before_hang.get(to_sq, None)  # not meaningful; check from-square instead
     from_was_hanging = chess.square_name(move.from_square) in before_hang
     if from_was_hanging:
         h = before_hang[chess.square_name(move.from_square)]
+        n_atk = len(board.attackers(not mover, move.from_square))
         if h["loose"]:
-            bullets.append(f"removes the {piece_name} from an **unsupported square** ({from_sq} was attacked and undefended)")
+            bullets.append((
+                f"removes the {piece_name} from an **unsupported square** ({from_sq} was attacked and undefended)",
+                f"On {from_sq} it was attacked {n_atk}x and defended 0x — one careless move and it simply drops.",
+            ))
         else:
-            bullets.append(f"moves the {piece_name} off a **contested square** ({from_sq}) to safety")
+            bullets.append((
+                f"moves the {piece_name} off a **contested square** ({from_sq}) to safety",
+                f"It was attacked {n_atk}x on {from_sq}; stepping away ends the tension on your terms.",
+            ))
     # 2. defends friendlies
     defended_now = []
     for sq, p in after.piece_map().items():
@@ -529,48 +564,78 @@ def explain_move(board: chess.Board, move: chess.Move, depth: int = 2) -> dict:
             if after.is_attacked_by(mover, sq) and not board.is_attacked_by(mover, sq):
                 defended_now.append(f"{PIECE_NAMES[p.piece_type]} on {chess.square_name(sq)}")
     if defended_now:
-        bullets.append("defends " + ", ".join(defended_now[:3]))
+        bullets.append((
+            "defends " + ", ".join(defended_now[:3]),
+            "New coverage means those pieces can no longer be won outright — the opponent must find another target.",
+        ))
     # 3. fixed hanging pieces (moved or newly defended)
     if fixed and not from_was_hanging:
-        bullets.append("leaves no hanging pieces behind (" + ", ".join(fixed[:3]) + " now safe)")
-    # 4. new threats created
-    my_threats = immediate_threats(after, limit=4) if not after.is_game_over() else []
-    # threats are from opponent's perspective after our move; compute OUR threats:
-    ours = immediate_threats(after.copy() if False else after, limit=4)
-    # immediate_threats uses side-to-move; after.push flipped turn, so flip back:
+        bullets.append((
+            "leaves no hanging pieces behind (" + ", ".join(fixed[:3]) + " now safe)",
+            "Every one of your pieces is defended after this move, so there is nothing cheap to grab.",
+        ))
+    # 4. new threats created (evaluate from OUR perspective after the move)
     tmp = after.copy()
     tmp.turn = mover
     ours = immediate_threats(tmp, limit=4)
     for t in ours[:3]:
-        bullets.append(f"enables the threat of **{t['text']}**")
+        bullets.append((
+            f"enables the threat of **{t['text']}**",
+            f"If ignored, that idea is worth roughly {abs(t['score'])/100:.1f} pawns — the opponent must spend a move stopping it.",
+        ))
     # 5. capture / check / mate / promotion specifics
     was_capture = board.is_capture(move)
     if was_capture:
         cap = board.piece_at(move.to_square)
         if cap:
-            bullets.append(f"captures the {PIECE_NAMES[cap.piece_type]} on {to_sq} (wins ~{PIECE_VALUES[cap.piece_type]//100} pawn{'s' if cap.piece_type != chess.PAWN else ''} of material)")
+            bullets.append((
+                f"captures the {PIECE_NAMES[cap.piece_type]} on {to_sq} (wins ~{PIECE_VALUES[cap.piece_type]//100} pawn{'s' if cap.piece_type != chess.PAWN else ''} of material)",
+                "Forcing a recapture (or winning it for free) shifts the material balance immediately.",
+            ))
         else:
-            bullets.append(f"captures on {to_sq} (en passant)")
+            bullets.append((
+                f"captures on {to_sq} (en passant)",
+                "Removing that advanced pawn stops it from becoming a passed-pawn problem later.",
+            ))
     if after.is_checkmate():
-        bullets.append("**delivers checkmate** — the game ends here")
+        bullets.append(("**delivers checkmate** — the game ends here", "There is no defense; the king has no legal escape."))
     elif after.is_check():
-        bullets.append(f"gives **check** — the enemy king must respond")
+        bullets.append((
+            "gives **check** — the enemy king must respond",
+            "Checks force the reply, so you gain a free move to improve your position afterwards.",
+        ))
     if move.promotion:
-        bullets.append(f"**promotes** to a {PIECE_NAMES[move.promotion]} — decisive material gain")
+        bullets.append((
+            f"**promotes** to a {PIECE_NAMES[move.promotion]} — decisive material gain",
+            "A new major piece outweighs almost any positional concession.",
+        ))
     if board.is_castling(move):
-        bullets.append("**castles** — tucks the king to safety and connects the rooks")
+        bullets.append((
+            "**castles** — tucks the king to safety and connects the rooks",
+            "King safety first: a castled king plus connected rooks is the foundation of every middlegame plan.",
+        ))
     # 6. activity / center
     if not bullets or len(bullets) < 2:
         if to_sq in ("e4", "d4", "e5", "d5"):
-            bullets.append(f"occupies the **center** ({to_sq}) with tempo")
-        b2 = after.copy()
-        mob_before = sum(1 for m in board.legal_moves if m.from_square == move.from_square)
-        mob_after = sum(1 for m in after.legal_moves if False)  # placeholder
-        bullets.append(f"improves the {piece_name}'s scope from {from_sq} → {to_sq}")
+            bullets.append((
+                f"occupies the **center** ({to_sq}) with tempo",
+                "Central squares control the most future options — pieces posted there radiate in every direction.",
+            ))
+        bullets.append((
+            f"improves the {piece_name}'s scope from {from_sq} → {to_sq}",
+            "Even without an immediate threat, a better-placed piece supports every future plan.",
+        ))
     if neutralized > 0:
-        bullets.insert(0, f"reduces enemy threats from {len(opp_before)} to {len(opp_after)}")
+        gone = [t["san"] for t in opp_before if t["san"] not in {x["san"] for x in opp_after}][:3]
+        bullets.insert(0, (
+            f"reduces enemy threats from {len(opp_before)} to {len(opp_after)}",
+            ("It takes " + ", ".join(gone) + " off the table. " if gone else "") + "Fewer enemy ideas means your own plans face less resistance.",
+        ))
     if not bullets:
-        bullets.append("keeps the balance while improving coordination")
+        bullets.append((
+            "keeps the balance while improving coordination",
+            "No forced win exists here — the value is prophylactic: better squares, fewer weaknesses.",
+        ))
 
     # Idea / Problem / Solution
     if opp_before:
@@ -591,7 +656,7 @@ def explain_move(board: chess.Board, move: chess.Move, depth: int = 2) -> dict:
     return {
         "san": san, "move": move, "piece": piece_name,
         "from": from_sq, "to": to_sq,
-        "bullets": bullets[:6],
+        "bullets": [{"t": t, "d": d} for t, d in bullets[:6]],
         "idea": idea, "problem": problem, "solution": solution,
         "gain_cp": gain_mover, "eval_before": before_eval, "eval_after": after_eval,
         "threats_before": opp_before, "threats_after": opp_after,
@@ -652,3 +717,172 @@ def format_eval(cp: int) -> str:
         return "#"
     sign = "+" if cp >= 0 else "−"
     return f"{sign}{abs(cp)/100:.2f}"
+
+
+# ------------------------------------------- DecodeChess narrative builders
+
+def engine_name() -> str:
+    """Display name of the engine behind the best line."""
+    return "Stockfish NNUE" if stockfish_available() else "Local Engine"
+
+
+def advantage_word(cp: int) -> str:
+    a = abs(cp)
+    if a >= 250:
+        return "decisive"
+    if a >= 120:
+        return "clear"
+    if a >= 50:
+        return "slight"
+    return "no"
+
+
+def _side_state(mover_pov_cp: int) -> str:
+    if mover_pov_cp >= 250:
+        return "a decisive advantage"
+    if mover_pov_cp >= 120:
+        return "a clear advantage"
+    if mover_pov_cp >= 50:
+        return "a slight advantage"
+    if mover_pov_cp > -50:
+        return "no advantage"
+    if mover_pov_cp > -250:
+        return "a worse position"
+    return "a lost position"
+
+
+def white_pov_threat(board: chess.Board, threat: dict) -> int:
+    """Threat scores from opponent_threats() are in the threat owner's POV."""
+    return threat["score"] if board.turn == chess.BLACK else -threat["score"]
+
+
+def position_assessment(board: chess.Board, searched_white_cp: int | None = None) -> str:
+    """One-line verdict like: 'White has a decisive advantage (+2.94) but
+    should beware of Black playing Qf6'.
+
+    Uses the searched score when provided (much more accurate than the raw
+    static eval); falls back to evaluate_board() otherwise."""
+    ev = evaluate_board(board) if searched_white_cp is None else searched_white_cp
+    side = "White" if ev >= 0 else "Black"
+    opp = "Black" if side == "White" else "White"
+    word = advantage_word(ev)
+    threats = opponent_threats(board, limit=3)
+    if word == "no":
+        base = f"The position is level ({ev/100:+.2f})"
+    else:
+        base = f"{side} has a {word} advantage ({ev/100:+.2f})"
+    if threats:
+        return base + f" but should beware of {opp} playing {threats[0]['san']}"
+    return base + " and there are no immediate threats to worry about"
+
+
+def _move_value(board: chess.Board, move: chess.Move, depth: int, time_s: float = 0.3) -> int:
+    """Value of playing `move`, in centipawns from the mover's perspective."""
+    sf_val = _sf_move_value(board, move, depth, time_s)
+    if sf_val is not None:
+        return sf_val
+    INF = 10 ** 9
+    b = board.copy()
+    b.push(move)
+    if b.is_checkmate():
+        return 100000 + depth
+    if b.is_game_over():
+        return 0
+    if depth <= 1:
+        return -_quiescence(b, -INF, INF)
+    return -_negamax(b, depth - 1, -INF, INF)
+
+
+def move_verdict(board: chess.Board, played: chess.Move, depth: int = 2, plies: int = 4,
+                 time_s: float = 0.4) -> dict | None:
+    """Grade `played` against the engine best.
+
+    Returns {label, loss_cp, sentence, refutation} where refutation is a
+    best_line-style list from the resulting position."""
+    if board.is_game_over():
+        return None
+    cands = engine_best_moves(board, depth=depth, limit=1, time_s=time_s)
+    if not cands:
+        return None
+    best, best_score = cands[0]
+    mover = board.turn
+    mover_name = "White" if mover == chess.WHITE else "Black"
+    try:
+        san = board.san(played)
+    except Exception:
+        san = board.uci(played)
+    try:
+        best_san = board.san(best)
+    except Exception:
+        best_san = board.uci(best)
+    n = board.fullmove_number
+    prefix = f"{n}. " if mover == chess.WHITE else f"{n}... "
+
+    if played == best:
+        label, loss = "Best move", 0
+        art = "the"
+    else:
+        loss = max(0, best_score - _move_value(board, played, depth, time_s))
+        label = classify_loss(loss) or "Good move"
+        art = "an" if label == "Inaccuracy" else "a"
+
+    after = board.copy()
+    after.push(played)
+    ev_after = evaluate_board(after)
+    mover_pov = ev_after if mover == chess.WHITE else -ev_after
+
+    if played == best:
+        sentence = f"{prefix}{san} is the best move — {mover_name} keeps {_side_state(mover_pov)} ({ev_after/100:+.2f})."
+    elif label == "Good move":
+        sentence = (f"{prefix}{san} is a good move (only {loss}cp off best). "
+                    f"{mover_name} keeps {_side_state(mover_pov)}.")
+    else:
+        bb = board.copy()
+        bb.push(best)
+        if bb.is_checkmate():
+            reason = "It misses mate"
+        elif board.is_capture(best):
+            reason = "It misses winning material"
+        elif bb.is_check():
+            reason = "It misses the strongest attack"
+        else:
+            reason = "It misses the strongest continuation"
+        sentence = (f"{prefix}{san} is {art} {label.lower()} ({-loss}cp). "
+                    f"{reason} and now {mover_name} has {_side_state(mover_pov)}.")
+    ref = best_line(after, depth=depth, plies=plies, time_s=time_s) if not after.is_game_over() else []
+    return {
+        "san": san, "best_san": best_san, "label": label, "loss_cp": loss,
+        "sentence": sentence, "played": played,
+        "refutation": [(s, m.uci(), sc) for s, m, sc in ref],
+    }
+
+
+def analyze_game(root: chess.Board, moves: list, depth: int = 1, time_s: float = 0.3) -> list:
+    """Grade every move: [{ply, san, side, best_san, loss_cp, tag, eval_before, eval_after}].
+    eval_* are White-POV centipawns; loss_cp >= 0 from the mover's POV."""
+    rows = []
+    b = root.copy()
+    for i, m in enumerate(moves):
+        mover = b.turn
+        ev_before = evaluate_board(b)
+        cands = engine_best_moves(b, depth=depth, limit=1, time_s=time_s)
+        best = cands[0][0] if cands else m
+        best_score = cands[0][1] if cands else 0
+        try:
+            san = b.san(m)
+        except Exception:
+            san = b.uci(m)
+        try:
+            best_san = b.san(best)
+        except Exception:
+            best_san = b.uci(best)
+        loss = 0 if m == best else max(0, best_score - _move_value(b, m, depth, time_s))
+        tag = "Best" if loss < 50 else classify_loss(loss)
+        b.push(m)
+        rows.append({
+            "ply": i + 1, "san": san,
+            "side": "White" if mover == chess.WHITE else "Black",
+            "best_san": best_san, "loss_cp": loss, "tag": tag,
+            "eval_before": ev_before, "eval_after": evaluate_board(b),
+        })
+    return rows
