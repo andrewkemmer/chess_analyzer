@@ -147,6 +147,18 @@ body {
 .mv { border: 1px solid transparent; background: none; border-radius: 6px; padding: 4px 6px; text-align: left; cursor: pointer; font-size: 14px; }
 .mv:hover { background: #eef3f7; }
 .mv.cur { background: var(--navy); color: #fff; font-weight: 700; }
+.mv-best { box-shadow: inset 3px 0 0 #35b558; }
+.mv-inacc { box-shadow: inset 3px 0 0 #e6af00; }
+.mv-mist { box-shadow: inset 3px 0 0 #e07b24; }
+.mv-blund { box-shadow: inset 3px 0 0 #d23b3b; }
+.dc-coord { position: absolute; font-size: 10px; font-weight: 700; pointer-events: none; z-index: 2; line-height: 1; }
+.dc-coord.file { right: 3px; bottom: 2px; }
+.dc-coord.rank { left: 3px; top: 2px; }
+.dc-coord.on-light { color: #5a6b78; }
+.dc-coord.on-dark { color: #d7dee5; }
+.dc-arrow { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 3; overflow: visible; }
+.dc-arrow line { stroke: rgba(53, 181, 88, 0.9); stroke-width: 0.22; }
+.dc-arrow marker path { fill: rgba(53, 181, 88, 0.9); }
 
 .graph { width: 100%; height: auto; background: #f7f9fb; border-radius: 6px; }
 .g-zero { stroke: #b9c4cd; stroke-width: 1; }

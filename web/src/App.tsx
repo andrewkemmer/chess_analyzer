@@ -165,12 +165,15 @@ export default function App() {
       if (view > 0) {
         verdict = await moveVerdict(engine, fenAt(rootFen, moves, view - 1), moves[view - 1], depth);
       }
+      // alternatives within an inaccuracy of best stay "good moves"; blunders are dropped
       const others: OtherLine[] = [];
       for (const pv of infos.slice(1)) {
+        const lossCp = infos[0].scoreCp - pv.scoreCp;
+        if (lossCp > 120) continue;
         try {
           const c = new Chess(posFen);
           const applied = c.move({ from: pv.move.slice(0, 2) as never, to: pv.move.slice(2, 4) as never, promotion: (pv.move[4] as never) });
-          others.push({ san: applied.san, uci: pv.move, whiteCp: moverIsWhite ? pv.scoreCp : -pv.scoreCp });
+          others.push({ san: applied.san, uci: pv.move, whiteCp: moverIsWhite ? pv.scoreCp : -pv.scoreCp, lossCp });
         } catch { /* skip */ }
       }
       const data: DecodeData = {
@@ -310,10 +313,13 @@ export default function App() {
         {decodeErr && panel === 'decode' && <div className="card err">{decodeErr}</div>}
         {panel === 'decode' && <DecodeView data={decode?.fen === posFen ? decode : null} loading={decoding} />}
         {panel === 'game' && (
-          <GameView rootFen={rootFen} sans={sans} view={view} onGoto={gotoPly} result={headers['Result']} />
+          <GameView
+            rootFen={rootFen} sans={sans} view={view} onGoto={gotoPly} result={headers['Result']}
+            grades={rows ? Object.fromEntries(rows.map((r) => [r.ply, r.tag])) : undefined}
+          />
         )}
         {panel === 'graph' && (
-          <GraphView rows={rows} view={view} onGoto={gotoPly} onAnalyze={runAnalyze} analyzing={analyzing} progress={progress} />
+          <GraphView rows={rows} view={view} onGoto={gotoPly} onAnalyze={runAnalyze} analyzing={analyzing} progress={progress} hasMoves={moves.length > 0} />
         )}
         {panel === 'move' && <MoveInfoView fen={posFen} />}
         {panel === 'engine' && (
@@ -323,7 +329,7 @@ export default function App() {
           />
         )}
         {panel === 'stats' && (
-          <StatsView rows={rows} analyzing={analyzing} progress={progress} onAnalyze={runAnalyze} onGoto={gotoPly} />
+          <StatsView rows={rows} analyzing={analyzing} progress={progress} onAnalyze={runAnalyze} onGoto={gotoPly} hasMoves={moves.length > 0} />
         )}
         {panel === 'info' && (
           <InfoView headers={headers} rootFen={rootFen} fen={posFen} moveCount={moves.length} pgn={pgn} />

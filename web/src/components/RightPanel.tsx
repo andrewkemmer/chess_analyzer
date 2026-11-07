@@ -8,7 +8,7 @@ import {
   allFunctionality, formatEval, hangingPieces, opponentThreats, positionConcepts,
 } from '../lib/explain';
 
-export interface OtherLine { san: string; uci: string; whiteCp: number }
+export interface OtherLine { san: string; uci: string; whiteCp: number; lossCp: number }
 
 export interface DecodeData {
   fen: string;
@@ -35,14 +35,15 @@ function renderLine(line: LineStep[], fen: string): string {
   return out.join('  ');
 }
 
-function ThreatsList({ fen, threats }: { fen: string; threats: Threat[] }) {
-  const turn = fen.split(' ')[1] as 'w' | 'b';
-  const owner = turn === 'w' ? 'b' : 'w';
+function ThreatsList({ threats, maker }: { threats: Threat[]; maker: 'w' | 'b' }) {
   if (!threats.length) return <p className="muted">No forcing threats right now.</p>;
+  // t.score is evalPerspective of the position right after the threat move,
+  // i.e. from the victim's (side-to-move's) POV — convert to White POV.
+  const victimTurn = maker === 'w' ? 'b' : 'w';
   return (
     <ul className="threats">
       {threats.slice(0, 5).map((t, i) => {
-        const whiteCp = owner === 'w' ? t.score : -t.score;
+        const whiteCp = victimTurn === 'w' ? t.score : -t.score;
         return (
           <li key={i}>
             <strong>{t.san}</strong> <span className="muted">({formatEval(whiteCp)})</span>
@@ -89,19 +90,25 @@ export function DecodeView({ data, loading }: { data: DecodeData | null; loading
         </div>
       )}
       <div className="card">
-        <h3>Major threats</h3>
-        <ThreatsList fen={data.fen} threats={data.expl.threatsAfter} />
+        <h3>Major threats before {data.expl.san}</h3>
+        <ThreatsList threats={data.expl.threatsBefore} maker={data.fen.split(' ')[1] === 'w' ? 'b' : 'w'} />
       </div>
-      {!!data.others.length && (
-        <div className="card">
-          <h3>Other good moves</h3>
+      <div className="card">
+        <h3>Major threats after {data.expl.san}</h3>
+        <ThreatsList threats={data.expl.threatsAfter} maker={data.fen.split(' ')[1] === 'w' ? 'w' : 'b'} />
+      </div>
+      <div className="card">
+        <h3>Other good moves</h3>
+        {data.others.length ? (
           <ul className="threats">
             {data.others.map((o, i) => (
               <li key={i}><strong>{o.san}</strong> <span className="muted">({formatEval(o.whiteCp)})</span></li>
             ))}
           </ul>
-        </div>
-      )}
+        ) : (
+          <p className="muted">The best move stands out — every alternative is significantly worse.</p>
+        )}
+      </div>
       <div className="card">
         <h3>Plans & ideas</h3>
         <ul className="threats">
@@ -121,8 +128,11 @@ export function md(s: string): string {
 
 /* ---------------------------------------------------------- game */
 
-export function GameView({ rootFen, sans, view, onGoto, result }: {
+const GRADE_CLASS: Record<string, string> = { Best: 'mv-best', Inaccuracy: 'mv-inacc', Mistake: 'mv-mist', Blunder: 'mv-blund' };
+
+export function GameView({ rootFen, sans, view, onGoto, result, grades }: {
   rootFen: string; sans: string[]; view: number; onGoto: (ply: number) => void; result?: string;
+  grades?: Record<number, string>;
 }) {
   const startTurn = rootFen.split(' ')[1] as 'w' | 'b';
   const startNo = parseInt(rootFen.split(' ')[5] || '1', 10);
@@ -143,10 +153,10 @@ export function GameView({ rootFen, sans, view, onGoto, result }: {
           <div key={i} className="moverow">
             <span className="movenum">{r.n}{r.b == null && r.w == null ? '' : r.w != null && r.b == null ? '.' : r.w == null ? '...' : '.'}</span>
             {r.w != null
-              ? <button className={'mv' + (view === r.w + 1 ? ' cur' : '')} onClick={() => onGoto(r.w! + 1)}>{sans[r.w]}</button>
+              ? <button className={'mv' + (view === r.w + 1 ? ' cur' : '') + (grades && grades[r.w + 1] ? ' ' + (GRADE_CLASS[grades[r.w + 1]] ?? '') : '')} onClick={() => onGoto(r.w! + 1)}>{sans[r.w]}</button>
               : <span />}
             {r.b != null
-              ? <button className={'mv' + (view === r.b + 1 ? ' cur' : '')} onClick={() => onGoto(r.b! + 1)}>{sans[r.b]}</button>
+              ? <button className={'mv' + (view === r.b + 1 ? ' cur' : '') + (grades && grades[r.b + 1] ? ' ' + (GRADE_CLASS[grades[r.b + 1]] ?? '') : '')} onClick={() => onGoto(r.b! + 1)}>{sans[r.b]}</button>
               : <span />}
           </div>
         ))}
@@ -158,9 +168,9 @@ export function GameView({ rootFen, sans, view, onGoto, result }: {
 
 /* ---------------------------------------------------------- graph */
 
-export function GraphView({ rows, view, onGoto, onAnalyze, analyzing, progress }: {
+export function GraphView({ rows, view, onGoto, onAnalyze, analyzing, progress, hasMoves }: {
   rows: AnalysisRow[] | null; view: number; onGoto: (ply: number) => void;
-  onAnalyze: () => void; analyzing: boolean; progress: string;
+  onAnalyze: () => void; analyzing: boolean; progress: string; hasMoves: boolean;
 }) {
   const chart = useMemo(() => {
     if (!rows?.length) return null;
@@ -176,8 +186,8 @@ export function GraphView({ rows, view, onGoto, onAnalyze, analyzing, progress }
       <div className="card">
         <h3>Evaluation graph</h3>
         <p className="muted">Grade every move to see the game's story arc.</p>
-        <button className="btn primary" onClick={onAnalyze} disabled={analyzing}>
-          {analyzing ? `Analyzing… ${progress}` : 'Analyze all moves'}
+        <button className="btn primary" onClick={onAnalyze} disabled={analyzing || !hasMoves}>
+          {analyzing ? `Analyzing… ${progress}` : hasMoves ? 'Analyze all moves' : 'Load a game with moves first'}
         </button>
       </div>
     );
@@ -289,17 +299,17 @@ export function EngineView({ name, engineDepth, engineNps, depth, setDepth, plie
 
 const TAG_CLASS: Record<string, string> = { Best: 'tag-best', Inaccuracy: 'tag-inacc', Mistake: 'tag-mist', Blunder: 'tag-blund' };
 
-export function StatsView({ rows, analyzing, progress, onAnalyze, onGoto }: {
+export function StatsView({ rows, analyzing, progress, onAnalyze, onGoto, hasMoves }: {
   rows: AnalysisRow[] | null; analyzing: boolean; progress: string;
-  onAnalyze: () => void; onGoto: (ply: number) => void;
+  onAnalyze: () => void; onGoto: (ply: number) => void; hasMoves: boolean;
 }) {
   if (!rows) {
     return (
       <div className="card">
         <h3>Game statistics</h3>
         <p className="muted">Grade every move with the engine to see mistakes, blunders and the eval story.</p>
-        <button className="btn primary" onClick={onAnalyze} disabled={analyzing}>
-          {analyzing ? `Analyzing… ${progress}` : 'Analyze all moves'}
+        <button className="btn primary" onClick={onAnalyze} disabled={analyzing || !hasMoves}>
+          {analyzing ? `Analyzing… ${progress}` : hasMoves ? 'Analyze all moves' : 'Load a game with moves first'}
         </button>
       </div>
     );

@@ -199,9 +199,11 @@ export function immediateThreats(chess: Chess, limit = 5): Threat[] {
   return threats;
 }
 
-/** Threats the opponent will have if we do nothing (null-move view). */
+/** Threats the opponent will have if we do nothing (null-move view).
+ *  Empty when the side to move is in check: there is no "do nothing" option,
+ *  and the null-move trick makes chess.js emit illegal king-capture SANS. */
 export function opponentThreats(chess: Chess, limit = 5): Threat[] {
-  if (chess.isGameOver()) return [];
+  if (chess.isGameOver() || chess.isCheck()) return [];
   const fen = chess.fen().split(' ');
   fen[1] = chess.turn() === 'w' ? 'b' : 'w';
   try {
@@ -503,8 +505,26 @@ export function explainMove(chess: Chess, uci: string): ExplainResult | null {
     });
   }
 
+  const wasInCheck = before.isCheck();
+  if (wasInCheck) {
+    // squares of the enemy pieces giving check
+    let kingSq: Square | null = null;
+    for (const sq of SQUARES) {
+      const p = before.get(sq as never);
+      if (p && p.color === mover && p.type === 'k') { kingSq = sq; break; }
+    }
+    const checkers = kingSq ? before.attackers(kingSq as never, opp(mover)).map(String) : [];
+    bullets.unshift({
+      t: `gets out of **check** (${from} → ${to})`,
+      d: checkers.length
+        ? `The king on ${kingSq} was in check from ${checkers.join(', ')} — this move leaves it safe and the game goes on.`
+        : 'The king was in check — this move leaves it safe and the game goes on.',
+    });
+  }
+
   let problem: string;
-  if (oppBefore.length > 1) problem = `Enemy was threatening ${oppBefore[0].text} (and ${oppBefore.length - 1} more). `;
+  if (wasInCheck) problem = `${moverName} is **in check** and must answer it — every legal move gets the king safe. `;
+  else if (oppBefore.length > 1) problem = `Enemy was threatening ${oppBefore[0].text} (and ${oppBefore.length - 1} more). `;
   else if (oppBefore.length === 1) problem = `Enemy was threatening ${oppBefore[0].text}. `;
   else if (Object.keys(beforeHang).length) {
     const k = Object.keys(beforeHang)[0];
@@ -617,13 +637,18 @@ function sideState(moverPovCp: number): string {
 export function positionAssessment(chess: Chess, searchedWhiteCp?: number): string {
   const ev = searchedWhiteCp ?? evaluateBoard(chess);
   const side = ev >= 0 ? 'White' : 'Black';
-  const oppName = side === 'White' ? 'Black' : 'White';
+  // opponentThreats() returns the moves of whoever is NOT to move
+  const threatOwner = chess.turn() === 'w' ? 'Black' : 'White';
   const word = advantageWord(ev);
   const threats = opponentThreats(chess, 3);
   const base = word === 'no'
     ? `The position is level (${(ev / 100 >= 0 ? '+' : '')}${(ev / 100).toFixed(2)})`
     : `${side} has a ${word} advantage (${(ev / 100 >= 0 ? '+' : '')}${(ev / 100).toFixed(2)})`;
-  if (threats.length) return `${base} but should beware of ${oppName} playing ${threats[0].san}`;
+  if (chess.isCheck()) {
+    const checked = chess.turn() === 'w' ? 'White' : 'Black';
+    return `${base}, but ${checked} is **in check** and must answer it immediately`;
+  }
+  if (threats.length) return `${base} but should beware of ${threatOwner} playing ${threats[0].san}`;
   return `${base} and there are no immediate threats to worry about`;
 }
 

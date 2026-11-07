@@ -110,6 +110,23 @@ export default function Board({ fen, orientation, interactive, lastMove, checkSq
     }
   }
 
+  // square centers in 8x8 board units (for the best-move arrow overlay)
+  const centerOf = (sq: string): [number, number] => {
+    const f = FILES.indexOf(sq[0]);
+    const r = parseInt(sq[1], 10) - 1;
+    const x = (orientation === 'w' ? f : 7 - f) + 0.5;
+    const y = (orientation === 'w' ? 7 - r : r) + 0.5;
+    return [x, y];
+  };
+  const arrow = bestMove ? (() => {
+    const [x1, y1] = centerOf(bestMove.from);
+    const [x2, y2] = centerOf(bestMove.to);
+    // stop short so the arrowhead doesn't cover the piece
+    const ex = x1 + (x2 - x1) * 0.78;
+    const ey = y1 + (y2 - y1) * 0.78;
+    return { x1, y1, x2: ex, y2: ey };
+  })() : null;
+
   const activeFrom = drag?.from ?? sel;
   const dotsFor = activeFrom ? targets.get(activeFrom) ?? [] : [];
   const dotSet = new Set(dotsFor.map((t) => t.slice(0, 2)));
@@ -140,6 +157,12 @@ export default function Board({ fen, orientation, interactive, lastMove, checkSq
             className={'dc-sq ' + (dark ? 'dark' : 'light') + (isLast ? ' last' : '') + (isSel ? ' sel' : '')}
             onPointerDown={(e) => onPointerDown(sq, e)}
           >
+            {((orientation === 'w' && sq[1] === '1') || (orientation === 'b' && sq[1] === '8')) && (
+              <span className={'dc-coord file ' + (dark ? 'on-dark' : 'on-light')}>{sq[0]}</span>
+            )}
+            {((orientation === 'w' && sq[0] === 'a') || (orientation === 'b' && sq[0] === 'h')) && (
+              <span className={'dc-coord rank ' + (dark ? 'on-dark' : 'on-light')}>{sq[1]}</span>
+            )}
             {isCheck && <div className="dc-check" />}
             {isBest && <div className="dc-best" />}
             {showDot && <div className="dc-dot" />}
@@ -154,6 +177,16 @@ export default function Board({ fen, orientation, interactive, lastMove, checkSq
           </div>
         );
       })}
+      {arrow && (
+        <svg className="dc-arrow" viewBox="0 0 8 8" preserveAspectRatio="none">
+          <defs>
+            <marker id="dc-ah" markerWidth="3.2" markerHeight="3.2" refX="2.2" refY="1.6" orient="auto">
+              <path d="M0,0 L3.2,1.6 L0,3.2 z" />
+            </marker>
+          </defs>
+          <line x1={arrow.x1} y1={arrow.y1} x2={arrow.x2} y2={arrow.y2} markerEnd="url(#dc-ah)" />
+        </svg>
+      )}
       {drag && (
         <img
           className="dc-ghost"
