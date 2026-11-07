@@ -233,10 +233,7 @@ def board_css(b: chess.Board, sel, targets: dict, lastmove, check_sq, bestpair) 
                 css.append(f".st-key-sq_{name} button {{outline:3px solid #2e8b57 !important; outline-offset:-3px;}}")
             if sq in targets and p is not None and p.color != b.turn:
                 css.append(f".st-key-sq_{name} button {{outline:3px solid rgba(230,57,70,.9) !important; outline-offset:-3px;}}")
-            edge_file = (f == 0 and not flip) or (f == 7 and flip)
-            if edge_file:
-                cc = DARK_SQ if light else LIGHT_SQ
-                css.append(f".st-key-sq_{name} button::before {{content:'{r+1}'; color:{cc};}}")
+            pass  # DecodeChess shows no on-board coordinates
     css.append("</style>")
     return "\n".join(css)
 
@@ -327,12 +324,6 @@ def render_board(b: chess.Board, best_uci: str | None):
                         p = b.piece_at(sq)
                         st.session_state.selected = (sq if (p and p.color == b.turn) else None)
                         st.rerun()
-    # file letters
-    fr = st.columns(8, gap="small")
-    for ci, f in enumerate(files):
-        with fr[ci]:
-            st.markdown(f"<div style='text-align:center;opacity:.7'>{chr(97+f)}</div>",
-                        unsafe_allow_html=True)
     # promotion picker
     if st.session_state.pending_promo:
         pf, pt = st.session_state.pending_promo
@@ -598,6 +589,7 @@ with left:
                 played = (verdict["san"] if verdict else None)
                 label = prefix + (expl["san"] if expl else "?") + (f" ({played})" if played else "")
                 st.session_state.decodes.append({"label": label, "fen": b.fen()})
+                st.session_state.panel_idx = 0
             st.rerun()
     with tb[5]:
         if st.button("⟲", key="flip_btn", help="Flip the board", use_container_width=True):
@@ -632,70 +624,10 @@ with left:
 
     d = st.session_state.decode
     if not d or d.get("fen") != b.fen():
-        st.info("Tap **🔍 Decode** to get the explanation: assessment, best line, "
+        st.info("Tap **Decode** for the rich explanation: assessment, best line, "
                 "why it's good, your-move verdict, major threats, and how to find it.")
-    else:
-        expl = d["expl"]
-        st.markdown(d["assessment"])
-        with st.container(border=True):
-            st.markdown(f"**Explaining the best line of {engine_name()}**")
-            st.markdown(format_pv(b, [(s, chess.Move.from_uci(u), sc)
-                                      for s, u, sc in d["line"]]))
-        if expl:
-            st.markdown(f"**{glyph_san(expl['san'], b.turn)} is good because it**")
-            for i, bl in enumerate(expl["bullets"]):
-                with st.expander(bl["t"], expanded=(i == 0)):
-                    st.markdown(bl["d"])
-        v = d.get("verdict")
-        if v:
-            color = {"Best move": "green", "Good move": "green", "Inaccuracy": "orange",
-                     "Mistake": "orange", "Blunder": "red"}.get(v["label"], "blue")
-            st.markdown(f":{color}[**{v['sentence']}**]")
-            if v["label"] not in ("Best move", "Good move") and v["refutation"]:
-                st.markdown(f"**The best play after {v['san']}:**")
-                st.markdown(format_pv(b, [(s, chess.Move.from_uci(u), sc)
-                                          for s, u, sc in v["refutation"]]))
-        st.markdown("### Major threats")
-        threats = opponent_threats(b, limit=5)
-        if not threats:
-            st.markdown("No direct threats right now — plans matter more than tactics here.")
-        for t in threats:
-            tag = white_pov_threat(b, t) / 100
-            fb = b.copy()
-            fb.turn = not fb.turn
-            try:
-                sub = explain_move(fb, t["move"], depth=1)
-                details = [x["t"] for x in sub["bullets"][:5]] or [t["text"]]
-            except Exception:
-                details = [t["text"]]
-            with st.expander(f"{t['san']} ({tag:+.2f})"):
-                for x in details:
-                    st.markdown(f"- {x}")
-        with st.expander("**How to find the best move**", expanded=False):
-            st.markdown("**Pay attention to**")
-            for c in position_concepts(b):
-                st.markdown(f"- {c}")
-            if expl:
-                st.markdown("**Your plan:**")
-                for p in expl["plans"]:
-                    st.markdown(f"- {p}")
-        if len(d["candidates"]) > 1:
-            st.markdown("### Other good moves")
-            for uci, sc in d["candidates"][1:4]:
-                try:
-                    mv = chess.Move.from_uci(uci)
-                    se = explain_move(b, mv, depth=1)
-                    wv = sc if b.turn == chess.WHITE else -sc
-                    with st.expander(f"{se['san']} ({wv/100:+.2f})"):
-                        for bl in se["bullets"][:4]:
-                            st.markdown(f"- {bl['t']}")
-                except Exception:
-                    continue
-        with st.expander("**Piece functionality**", expanded=False):
-            for f in all_functionality(b):
-                st.markdown(f"- {f}")
 
-PANELS = ["Game", "Graph", "Move Info", "Engine", "Statistics", "Info"]
+PANELS = ["Decode", "Game", "Graph", "Move Info", "Engine", "Statistics", "Info"]
 with right:
     choice = st.radio("Panel", PANELS, index=st.session_state.panel_idx,
                       horizontal=True, label_visibility="collapsed")
@@ -703,7 +635,76 @@ with right:
     panel = choice
     root = board_at(0)
 
-    if panel == "Game":
+    if panel == "Decode":
+        d = st.session_state.decode
+        if not d or d.get("fen") != b.fen():
+            st.markdown("#### Decode")
+            st.caption("Press Decode under the board for the full rich explanation.")
+        else:
+            expl = d["expl"]
+            st.markdown(d["assessment"])
+            with st.container(border=True):
+                st.markdown(f"**Explaining the best line of {engine_name()}**")
+                st.markdown(format_pv(b, [(s, chess.Move.from_uci(u), sc)
+                                          for s, u, sc in d["line"]]))
+            if expl:
+                st.markdown(f"**According to Chess Explainer, "
+                            f"{glyph_san(expl['san'], b.turn)} is recommended because it:**")
+                for i, bl in enumerate(expl["bullets"]):
+                    with st.expander(f"+ {bl['t']}", expanded=(i == 0)):
+                        st.markdown(bl["d"])
+            v = d.get("verdict")
+            if v:
+                color = {"Best move": "green", "Good move": "green", "Notable move": "blue",
+                         "Inaccuracy": "orange", "Mistake": "orange",
+                         "Blunder": "red"}.get(v["label"], "blue")
+                st.markdown(f":{color}[**{v['sentence']}**]")
+                if v["label"] not in ("Best move", "Good move", "Notable move") \
+                        and v["refutation"]:
+                    st.markdown(f"**The best play after {v['san']}:**")
+                    st.markdown(format_pv(b, [(s, chess.Move.from_uci(u), sc)
+                                              for s, u, sc in v["refutation"]]))
+            st.markdown("### Major threats")
+            threats = opponent_threats(b, limit=5)
+            if not threats:
+                st.markdown("No direct threats right now — plans matter more than tactics here.")
+            for t in threats:
+                tag = white_pov_threat(b, t) / 100
+                fb = b.copy()
+                fb.turn = not fb.turn
+                try:
+                    sub = explain_move(fb, t["move"], depth=1)
+                    details = [x["t"] for x in sub["bullets"][:5]] or [t["text"]]
+                except Exception:
+                    details = [t["text"]]
+                with st.expander(f"{t['san']} ({tag:+.2f})"):
+                    for x in details:
+                        st.markdown(f"- {x}")
+            with st.expander("**How to find the best move**", expanded=False):
+                st.markdown("**Pay attention to**")
+                for c in position_concepts(b):
+                    st.markdown(f"- {c}")
+                if expl:
+                    st.markdown("**Your plan:**")
+                    for p in expl["plans"]:
+                        st.markdown(f"- {p}")
+            if len(d["candidates"]) > 1:
+                st.markdown("### Other good moves")
+                for uci, sc in d["candidates"][1:4]:
+                    try:
+                        mv = chess.Move.from_uci(uci)
+                        se = explain_move(b, mv, depth=1)
+                        wv = sc if b.turn == chess.WHITE else -sc
+                        with st.expander(f"{se['san']} ({wv/100:+.2f})"):
+                            for bl in se["bullets"][:4]:
+                                st.markdown(f"- {bl['t']}")
+                    except Exception:
+                        continue
+            with st.expander("**Piece functionality**", expanded=False):
+                for f in all_functionality(b):
+                    st.markdown(f"- {f}")
+
+    elif panel == "Game":
         st.markdown("#### Game")
         if not st.session_state.moves:
             st.caption("No moves yet — play on the board or import a game.")
