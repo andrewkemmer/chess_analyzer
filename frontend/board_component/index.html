@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  #dcb { width: 100%; max-width: 560px; aspect-ratio: 1 / 1; position: relative;
+         user-select: none; -webkit-user-select: none; touch-action: none;
+         border-radius: 4px; overflow: hidden; }
+  .row { display: flex; width: 100%; height: 12.5%; }
+  .sq { width: 12.5%; height: 100%; position: relative; }
+  .sql { background-color: #f3f3f3; }
+  .sqd { background-color: #9faab2; }
+  .sq img.pc { width: 100%; height: 100%; display: block; pointer-events: none; }
+  .hl-last { box-shadow: inset 0 0 0 100px rgba(240, 230, 60, .55); }
+  .hl-best { box-shadow: inset 0 0 0 3px #2e8b57; }
+  .hl-check { box-shadow: inset 0 0 8px 4px #f33; }
+  .hl-sel { box-shadow: inset 0 0 0 100px rgba(110, 180, 110, .55); }
+  .hl-dot::after { content: ""; position: absolute; left: 38%; top: 38%;
+                   width: 24%; height: 24%; border-radius: 50%;
+                   background: rgba(30, 60, 50, .35); }
+  .hl-cap { box-shadow: inset 0 0 0 3px rgba(230, 57, 70, .85); }
+  #ghost { position: fixed; z-index: 9999; pointer-events: none; display: none; }
+  #ghost img { width: 100%; height: 100%; display: block; }
+</style>
+</head>
+<body>
+<div id="dcb"></div>
+<div id="ghost"></div>
+<script type="module">
+import { Streamlit } from "./lib/stlib.mjs";
+
+const FILES = "abcdefgh";
+let selected = null;
+
+function sqName(f, r) { return FILES[f] + (r + 1); }
+
+function parseFenPlacement(fen) {
+  const grid = {};
+  const rows = fen.split(" ")[0].split("/");
+  for (let r = 0; r < 8; r++) {
+    let f = 0;
+    for (const ch of rows[7 - r]) {
+      if (/\d/.test(ch)) { f += parseInt(ch, 10); }
+      else { grid[sqName(f, r)] = ch; f++; }
+    }
+  }
+  return grid;
+}
+
+function render(args) {
+  const el = document.getElementById("dcb");
+  el.innerHTML = "";
+  selected = null;
+  const grid = parseFenPlacement(args.fen || "start");
+  const flip = args.orientation === "black";
+  const last = new Set(args.last || []);
+  const best = new Set(args.best || []);
+  const dots = new Set(args.dots || []);
+  const caps = new Set(args.caps || []);
+
+  for (let dr = 0; dr < 8; dr++) {
+    const row = document.createElement("div");
+    row.className = "row";
+    for (let df = 0; df < 8; df++) {
+      const f = flip ? 7 - df : df;
+      const r = flip ? dr : 7 - dr;
+      const sq = sqName(f, r);
+      const d = document.createElement("div");
+      d.className = "sq " + (((f + r) % 2 === 1) ? "sql" : "sqd");
+      d.dataset.sq = sq;
+      if (last.has(sq)) d.classList.add("hl-last");
+      if (best.has(sq)) d.classList.add("hl-best");
+      if (args.check === sq) d.classList.add("hl-check");
+      if (dots.has(sq)) d.classList.add(grid[sq] ? "hl-cap" : "hl-dot");
+      if (grid[sq]) {
+        const img = document.createElement("img");
+        img.className = "pc";
+        const code = (grid[sq] === grid[sq].toUpperCase() ? "w" : "b") +
+                     grid[sq].toUpperCase();
+        img.src = "./pieces/" + code + ".svg";
+        img.draggable = false;
+        d.appendChild(img);
+      }
+      d.addEventListener("pointerdown", (e) => onDown(e, sq, args, grid));
+      row.appendChild(d);
+    }
+    el.appendChild(row);
+  }
+  Streamlit.setFrameHeight();
+}
+
+function pieceColorAt(grid, sq) {
+  const p = grid[sq];
+  if (!p) return null;
+  return p === p.toUpperCase() ? "w" : "b";
+}
+
+function targetsFrom(grid, legal, from) {
+  return legal.filter((u) => u.slice(0, 4) === from || (u.length === 4 && u.slice(0, 4) === from));
+}
+
+function onDown(e, sq, args, grid) {
+  if (!args.interactive) return;
+  e.preventDefault();
+  const turn = args.turn === "b" ? "b" : "w";
+  if (selected && selected !== sq) {
+    const cands = (args.legal || []).filter((u) => u.slice(0, 2) === selected && u.slice(2, 4) === sq);
+    if (cands.length > 0) {
+      if (cands.length > 1 || cands[0].length === 5) {
+        Streamlit.setComponentValue({ t: "promo", from: selected, to: sq });
+      } else {
+        Streamlit.setComponentValue({ t: "move", uci: cands[0].slice(0, 4) });
+      }
+      selected = null;
+      paintSelection(args, grid);
+      return;
+    }
+  }
+  if (pieceColorAt(grid, sq) === turn) {
+    selected = (selected === sq) ? null : sq;
+  } else {
+    selected = null;
+  }
+  paintSelection(args, grid);
+  if (selected && pieceColorAt(grid, selected) === turn) {
+    startDrag(e, selected, args, grid);
+  }
+}
+
+function paintSelection(args, grid) {
+  document.querySelectorAll("#dcb .sq").forEach((d) => {
+    d.classList.remove("hl-sel", "hl-dot", "hl-cap");
+  });
+  if (!selected) return;
+  document.querySelector(`#dcb .sq[data-sq="${selected}"]`).classList.add("hl-sel");
+  (args.legal || []).forEach((u) => {
+    if (u.slice(0, 2) === selected) {
+      const to = u.slice(2, 4);
+      const t = document.querySelector(`#dcb .sq[data-sq="${to}"]`);
+      if (t) t.classList.add(grid[to] ? "hl-cap" : "hl-dot");
+    }
+  });
+}
+
+function startDrag(e, from, args, grid) {
+  const ghost = document.getElementById("ghost");
+  const img = document.querySelector(`#dcb .sq[data-sq="${from}"] img`);
+  if (!img) return;
+  const board = document.getElementById("dcb").getBoundingClientRect();
+  const size = board.width / 8;
+  ghost.innerHTML = "";
+  const c = img.cloneNode();
+  ghost.appendChild(c);
+  ghost.style.display = "block";
+  ghost.style.width = size + "px";
+  ghost.style.height = size + "px";
+  const moveGhost = (ev) => {
+    ghost.style.left = (ev.clientX - size / 2) + "px";
+    ghost.style.top = (ev.clientY - size / 2) + "px";
+  };
+  moveGhost(e);
+  img.style.visibility = "hidden";
+  const up = (ev) => {
+    window.removeEventListener("pointermove", moveGhost);
+    window.removeEventListener("pointerup", up, true);
+    ghost.style.display = "none";
+    img.style.visibility = "";
+    const x = Math.floor((ev.clientX - board.left) / size);
+    const y = Math.floor((board.bottom - ev.clientY) / size);
+    selected = null;
+    paintSelection(args, grid);
+    if (x < 0 || x > 7 || y < 0 || y > 7) return;
+    const flip = args.orientation === "black";
+    const f = flip ? 7 - x : x;
+    const r = flip ? 7 - y : y;
+    const to = sqName(f, r);
+    if (to === from) { selected = from; paintSelection(args, grid); return; }
+    const cands = (args.legal || []).filter((u) => u.slice(0, 2) === from && u.slice(2, 4) === to);
+    if (cands.length > 1 || (cands.length === 1 && cands[0].length === 5)) {
+      Streamlit.setComponentValue({ t: "promo", from: from, to: to });
+    } else if (cands.length === 1) {
+      Streamlit.setComponentValue({ t: "move", uci: cands[0].slice(0, 4) });
+    }
+  };
+  window.addEventListener("pointermove", moveGhost);
+  window.addEventListener("pointerup", up, true);
+}
+
+function onRender(event) {
+  const args = event.detail.args;
+  render(args);
+}
+
+Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
+Streamlit.setComponentReady();
+Streamlit.setFrameHeight();
+</script>
+</body>
+</html>

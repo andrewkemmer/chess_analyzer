@@ -11,6 +11,7 @@ import random
 import chess
 import chess.pgn
 import streamlit as st
+import streamlit.components.v1 as components
 
 from chess_explain import (
     engine_best_moves, best_line, explain_move, opponent_threats,
@@ -21,11 +22,6 @@ from chess_explain import (
 )
 
 st.set_page_config(page_title="Chess Explainer", layout="wide", page_icon="♞")
-
-LIGHT_SQ, DARK_SQ = "#f3f3f3", "#9faab2"
-LAST_L, LAST_D = "#f7f769", "#b9bd58"
-SEL = "#829769"
-CHECK = "#ff6b5e"
 
 # Cburnett piece images (Wikimedia Commons) inlined as CSS data-URIs so the
 # board renders identically everywhere, with no font dependency.
@@ -188,9 +184,6 @@ div[data-testid="stDataFrame"], div.stCodeBlock {{
 div[data-testid="stVerticalBlock"] {{gap:.3rem !important;}}
 div[data-testid="stHorizontalBlock"] {{gap:.3rem !important;}}
 div[data-testid="column"] {{padding-left:.12rem !important; padding-right:.12rem !important;}}
-[class*="st-key-rank"] div[data-testid="stHorizontalBlock"] {{gap:0 !important;}}
-[class*="st-key-rank"] div[data-testid="column"] {{
-  padding-left:0 !important; padding-right:0 !important;}}
 [class*="st-key-tool"] {{text-align:center;}}
 [class*="st-key-tool"] button {{
   border-radius:6px !important; min-height:30px !important; height:30px !important;
@@ -223,63 +216,6 @@ section[data-testid="stSidebar"] .st-key-sb_decode button p {{
   text-align:center;}}
 </style>"""
 
-
-# ---------------------------------------------------------------- board css + click board
-def board_css(b: chess.Board, sel, targets: dict, lastmove, check_sq, bestpair) -> str:
-    flip = st.session_state.flip
-    css = ["""<style>
-[class*="st-key-sq_"] button {
-  border:none !important; border-radius:0 !important; padding:0 !important;
-  height:52px !important; min-height:0 !important; font-size:30px !important; line-height:1 !important;
-  position:relative !important; box-shadow:none !important;
-}
-[class*="st-key-sq_"] button p {margin:0 !important;}
-[class*="st-key-sq_"] button::before {
-  position:absolute; top:2px; left:4px; font-size:11px !important; font-weight:700;
-}
-@media (max-width:640px){ [class*="st-key-sq_"] button {height:40px !important; font-size:22px !important;} }
-</style>"""]
-    css.append("<style>")
-    ranks = range(7, -1, -1) if not flip else range(8)
-    files = range(8) if not flip else range(7, -1, -1)
-    for r in ranks:
-        for f in files:
-            sq = chess.square(f, r)
-            name = chess.square_name(sq)
-            light = (r + f) % 2 == 1
-            bg = LIGHT_SQ if light else DARK_SQ
-            if lastmove and sq in (lastmove.from_square, lastmove.to_square):
-                bg = LAST_L if light else LAST_D
-            if sel is not None and sq == sel:
-                bg = SEL
-            if check_sq is not None and sq == check_sq:
-                bg = CHECK
-            css.append(f".st-key-sq_{name} button {{background:{bg} !important;}}")
-            p = b.piece_at(sq)
-            if p is None and sq in targets:
-                css.append(f".st-key-sq_{name} button p {{color:rgba(30,60,50,.6) !important; font-size:16px !important;}}")
-            if p is not None:
-                code = p.symbol().lower() + ("_w" if p.color == chess.WHITE else "_b")
-                uri = PIECE_CSS.get(code, "")
-                if uri:
-                    css.append(f".st-key-sq_{name} button {{background:{bg} url(\"{uri}\") center / 78% no-repeat !important;}}")
-                    bg = None
-            if bg is not None:
-                css.append(f".st-key-sq_{name} button {{background:{bg} !important;}}")
-            if bestpair and sq in bestpair:
-                css.append(f".st-key-sq_{name} button {{outline:3px solid #2e8b57 !important; outline-offset:-3px;}}")
-            if sq in targets and p is not None and p.color != b.turn:
-                css.append(f".st-key-sq_{name} button {{outline:3px solid rgba(230,57,70,.9) !important; outline-offset:-3px;}}")
-            pass  # DecodeChess shows no on-board coordinates
-    css.append("</style>")
-    return "\n".join(css)
-
-
-def square_label(b: chess.Board, sq: int, targets: dict) -> str:
-    p = b.piece_at(sq)
-    if p is None:
-        return "●" if sq in targets else ""
-    return ""
 
 
 def do_engine_reply(nb_moves: list) -> list:
@@ -317,51 +253,57 @@ def do_move(mv: chess.Move):
     st.rerun()
 
 
+_dc_board = components.declare_component("dc_board",
+                                             path="frontend/board_component")
+
+
 def render_board(b: chess.Board, best_uci: str | None):
-    sel = st.session_state.selected
+    # DecodeChess architecture: a real JS board widget (drag + click),
+    # Python (python-chess + Stockfish) is the rules/engine authority.
     legal = list(b.legal_moves)
-    targets: dict[int, list] = {}
-    if sel is not None:
-        for mv in legal:
-            if mv.from_square == sel:
-                targets.setdefault(mv.to_square, []).append(mv)
-    lastmove = (chess.Move.from_uci(st.session_state.moves[st.session_state.view - 1])
-                if st.session_state.view > 0 else None)
-    check_sq = b.king(b.turn) if b.is_check() else None
-    bestpair = ()
+    last: list[str] = []
+    if st.session_state.view > 0:
+        try:
+            lm = chess.Move.from_uci(st.session_state.moves[st.session_state.view - 1])
+            last = [chess.square_name(lm.from_square),
+                    chess.square_name(lm.to_square)]
+        except Exception:
+            last = []
+    check = (chess.square_name(b.king(b.turn)) if b.is_check() else None)
+    best: list[str] = []
     if best_uci:
         try:
             bm = chess.Move.from_uci(best_uci)
-            bestpair = (bm.from_square, bm.to_square)
+            best = [chess.square_name(bm.from_square),
+                    chess.square_name(bm.to_square)]
         except Exception:
-            pass
-    st.markdown(board_css(b, sel, targets, lastmove, check_sq, bestpair),
-                unsafe_allow_html=True)
-    flip = st.session_state.flip
-    ranks = range(7, -1, -1) if not flip else range(8)
-    files = range(8) if not flip else range(7, -1, -1)
-    for r in ranks:
-        ctn = st.container(key=f"rank_{r:02d}")
-        row = ctn.columns(8, gap="small")
-        for ci, f in enumerate(files):
-            sq = chess.square(f, r)
-            label = square_label(b, sq, targets)
-            with row[ci]:
-                if st.button(label or " ", key=f"sq_{chess.square_name(sq)}",
-                             use_container_width=True):
-                    if st.session_state.pending_promo:
-                        pass
-                    elif sel is not None and sq in targets:
-                        mv = targets[sq][0]
-                        if any(m.promotion for m in targets[sq]):
-                            st.session_state.pending_promo = (sel, sq)
-                            st.rerun()
-                        else:
-                            do_move(mv)
-                    else:
-                        p = b.piece_at(sq)
-                        st.session_state.selected = (sq if (p and p.color == b.turn) else None)
-                        st.rerun()
+            best = []
+    val = _dc_board(fen=b.fen(),
+                    orientation="black" if st.session_state.flip else "white",
+                    turn="b" if b.turn == chess.BLACK else "w",
+                    legal=[m.uci() for m in legal],
+                    last=last, check=check, best=best,
+                    interactive=st.session_state.pending_promo is None,
+                    key=f"dcb_{b.fen()}_{st.session_state.flip}",
+                    default=None, height=560)
+    if isinstance(val, dict):
+        if val.get("t") == "move" and isinstance(val.get("uci"), str):
+            try:
+                mv = chess.Move.from_uci(val["uci"])
+                if mv in legal:
+                    do_move(mv)
+            except Exception:
+                pass
+        elif val.get("t") == "promo":
+            try:
+                pf = chess.parse_square(val["from"])
+                pt = chess.parse_square(val["to"])
+                if any(m.from_square == pf and m.to_square == pt and m.promotion
+                       for m in legal):
+                    st.session_state.pending_promo = (pf, pt)
+                    st.rerun()
+            except Exception:
+                pass
     # promotion picker
     if st.session_state.pending_promo:
         pf, pt = st.session_state.pending_promo
@@ -400,34 +342,6 @@ def evalbar_html(cp_white: int) -> str:
 <div style="width:30px;height:416px;background:#222;border-radius:5px;position:relative;overflow:hidden;">
 <div style="position:absolute;bottom:0;width:100%;height:{h}%;background:#f5f5f5;"></div>
 </div><div style="font-weight:700;">{txt}</div></div>"""
-
-
-def captured_html(b: chess.Board) -> str:
-    start = {"P": 8, "N": 2, "B": 2, "R": 2, "Q": 1}
-    have_w = dict(start)
-    have_b = {k.lower(): v for k, v in start.items()}
-    for p in b.piece_map().values():
-        key = p.symbol()  # uppercase = White, lowercase = Black
-        d = have_w if p.color == chess.WHITE else have_b
-        if key in d:
-            d[key] -= 1
-    def imgs(keys: str, missing: dict) -> str:
-        out = []
-        for k in keys:
-            code = k + ("_b" if k.islower() else "_w")
-            out.append(
-                f"<img src=\"{PIECE_CSS.get(code, '')}\" "
-                f"style='width:18px;height:18px;vertical-align:-3px'/>" * max(0, missing[k]))
-        return "".join(out)
-    took_by_w = imgs("pnbrq", have_b)  # black pieces White captured
-    took_by_b = imgs("PNBRQ", have_w)  # white pieces Black captured
-    vals = {"P": 1, "N": 3, "B": 3, "R": 5, "Q": 9}
-    diff = (sum(vals[k] * max(0, have_b[k.lower()]) for k in vals)
-            - sum(vals[k] * max(0, have_w[k]) for k in vals))
-    lead = f" (White +{diff})" if diff > 0 else (f" (Black +{-diff})" if diff < 0 else "")
-    if not took_by_w and not took_by_b:
-        return ""
-    return f"<div style='font-size:15px;opacity:.9'>Captured — White took {took_by_w or '—'} · Black took {took_by_b or '—'}{lead}</div>"
 
 
 def captured_rail_html(b: chess.Board) -> str:
