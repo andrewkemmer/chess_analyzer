@@ -236,6 +236,10 @@ def stockfish_available() -> str | None:
     return shutil.which("stockfish")
 
 
+ENGINE_INFO: dict = {"name": "Local Engine", "depth": None, "nps": None, "time": None}
+"""Stats about the last engine call (for the Engine panel)."""
+
+
 def engine_best_moves(board: chess.Board, depth: int = 2, limit: int = 5, time_s: float = 0.4):
     """Prefer Stockfish when installed, else pure-python search.
 
@@ -251,6 +255,14 @@ def engine_best_moves(board: chess.Board, depth: int = 2, limit: int = 5, time_s
             with chess.engine.SimpleEngine.popen_uci(sf) as eng:
                 info = eng.analyse(board, chess.engine.Limit(depth=d, time=time_s),
                                    multipv=min(max(int(limit), 1), 5))
+                try:
+                    ENGINE_INFO.update({
+                        "name": "Stockfish", "depth": info[0].get("depth"),
+                        "nps": info[0].get("nps"), "time": info[0].get("time"),
+                        "multipv": len(info),
+                    })
+                except Exception:
+                    ENGINE_INFO.update({"name": "Stockfish"})
                 out = []
                 for pv in info:
                     if not pv.get("pv"):
@@ -268,6 +280,8 @@ def engine_best_moves(board: chess.Board, depth: int = 2, limit: int = 5, time_s
                 return [(result.move, 0)] if result.move else []
         except Exception:
             pass
+    ENGINE_INFO.update({"name": "Local Engine", "depth": depth,
+                        "nps": None, "time": None})
     return search_moves(board, depth=depth, limit=limit)
 
 
