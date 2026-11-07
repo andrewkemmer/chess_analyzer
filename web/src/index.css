@@ -147,6 +147,9 @@ body {
 .mv { border: 1px solid transparent; background: none; border-radius: 6px; padding: 4px 6px; text-align: left; cursor: pointer; font-size: 14px; }
 .mv:hover { background: #eef3f7; }
 .mv.cur { background: var(--navy); color: #fff; font-weight: 700; }
+.variation { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; grid-column: 1 / -1; background: #f2f6fa; border: 1px dashed #9fb3c3; border-radius: 6px; padding: 3px 6px; margin: 2px 0; }
+.var-x { border: none; background: none; cursor: pointer; color: var(--muted); font-size: 12px; padding: 2px 4px; }
+.var-x:hover { color: #a12323; }
 .mv-best { box-shadow: inset 3px 0 0 #35b558; }
 .mv-inacc { box-shadow: inset 3px 0 0 #e6af00; }
 .mv-mist { box-shadow: inset 3px 0 0 #e07b24; }

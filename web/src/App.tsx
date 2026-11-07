@@ -19,7 +19,7 @@ import {
   RightPanel, StatsView,
 } from './components/RightPanel';
 import type { DecodeData } from './components/RightPanel';
-import { exportPgn, fenAt, parseImport, sansOf, takenAt, STARTING_FEN } from './lib/game';
+import { exportPgn, fenAt, numberedSans, parseImport, sansOf, takenAt, STARTING_FEN } from './lib/game';
 
 const RUY = `[White "Ruy Lopez"]
 [Black "Example"]
@@ -63,6 +63,10 @@ export default function App() {
   const [decoding, setDecoding] = useState(false);
   const [decodeErr, setDecodeErr] = useState<string | null>(null);
   const [rows, setRows] = useState<AnalysisRow[] | null>(null);
+  // exploratory sideline: main line stays intact, the deviation rides along
+  const [branch, setBranch] = useState<{ base: number; line: string[] } | null>(null);
+  const [inBranch, setInBranch] = useState(false);
+  const [bview, setBview] = useState(0); // absolute ply when inBranch
   const [analyzing, setAnalyzing] = useState(false);
   const [progress, setProgress] = useState('');
   const [dialog, setDialog] = useState<null | { kind: 'import' | 'setup' | 'help' | 'examples' | 'history' }>(null);
@@ -78,9 +82,23 @@ export default function App() {
     } catch { /* ignore */ }
   }, [hist]);
 
-  const posFen = useMemo(() => fenAt(rootFen, moves, view), [rootFen, moves, view]);
+  // effective line: main line, or main stem + exploratory branch
+  const fullUcis = useMemo(
+    () => (inBranch && branch ? [...moves.slice(0, branch.base), ...branch.line] : moves),
+    [inBranch, branch, moves],
+  );
+  const effView = inBranch && branch ? bview : view;
+  const posFen = useMemo(() => fenAt(rootFen, fullUcis, effView), [rootFen, fullUcis, effView]);
   const sans = useMemo(() => sansOf(rootFen, moves), [rootFen, moves]);
-  const taken = useMemo(() => takenAt(rootFen, moves, view), [rootFen, moves, view]);
+  const taken = useMemo(() => takenAt(rootFen, fullUcis, effView), [rootFen, fullUcis, effView]);
+  const baseFen = useMemo(
+    () => (branch ? fenAt(rootFen, moves, Math.min(branch.base, moves.length)) : rootFen),
+    [rootFen, moves, branch],
+  );
+  const branchTokens = useMemo(
+    () => (branch ? numberedSans(baseFen, branch.line) : []),
+    [baseFen, branch],
+  );
 
   const pos = useMemo(() => {
     try {
@@ -90,8 +108,8 @@ export default function App() {
     }
   }, [posFen]);
 
-  const lastMove: SimpleMove | null = view > 0
-    ? { from: moves[view - 1].slice(0, 2), to: moves[view - 1].slice(2, 4) }
+  const lastMove: SimpleMove | null = effView > 0 && fullUcis[effView - 1]
+    ? { from: fullUcis[effView - 1].slice(0, 2), to: fullUcis[effView - 1].slice(2, 4) }
     : null;
 
   const checkSquare = useMemo(() => {
@@ -114,16 +132,53 @@ export default function App() {
 
   const gotoPly = useCallback((ply: number) => {
     setView(Math.max(0, Math.min(moves.length, ply)));
+    setInBranch(false);
   }, [moves.length]);
 
+  const gotoBranch = useCallback((ply: number) => {
+    if (!branch) return;
+    const end = branch.base + branch.line.length;
+    const p = Math.max(branch.base, Math.min(end, ply));
+    if (p <= branch.base) {
+      setInBranch(false);
+      setView(branch.base);
+    } else {
+      setInBranch(true);
+      setBview(p);
+    }
+  }, [branch]);
+
+  const gotoEff = useCallback((ply: number) => {
+    if (branch && ply > branch.base) gotoBranch(ply);
+    else gotoPly(ply);
+  }, [branch, gotoBranch, gotoPly]);
+
+  const dropBranch = useCallback(() => {
+    setBranch(null);
+    setInBranch(false);
+  }, []);
+
   const playMove = useCallback((uci: string) => {
-    const next = [...moves.slice(0, view), uci];
-    setMoves(next);
-    setView(next.length);
+    if (inBranch && branch) {
+      // extend (or rewrite the tail of) the exploratory branch
+      const kept = branch.line.slice(0, Math.max(0, bview - branch.base));
+      const line = [...kept, uci];
+      setBranch({ base: branch.base, line });
+      setBview(branch.base + line.length);
+    } else if (view < moves.length) {
+      // deviate from the main line: keep it, ride a sideline instead
+      setBranch({ base: view, line: [uci] });
+      setInBranch(true);
+      setBview(view + 1);
+    } else {
+      const next = [...moves, uci];
+      setMoves(next);
+      setView(next.length);
+    }
     // the line changed: full-game grades no longer apply to these plies
     setRows(null);
     setPanel('decode');
-  }, [moves, view]);
+  }, [inBranch, branch, bview, view, moves]);
 
   const loadGame = useCallback((root: string, mv: string[], hdrs: Record<string, string>) => {
     setRootFen(root);
@@ -132,6 +187,9 @@ export default function App() {
     setHeaders(hdrs);
     setDecode(null);
     setRows(null);
+    setBranch(null);
+    setInBranch(false);
+    setBview(0);
     setPanel('game');
     const name = `${hdrs['White'] ?? 'White'} - ${hdrs['Black'] ?? 'Black'}`;
     setHist((h) => [{ name, rootFen: root, moves: mv, headers: hdrs }, ...h].slice(0, 20));
@@ -164,8 +222,8 @@ export default function App() {
       const moverIsWhite = pos.turn() === 'w';
       const assessment = positionAssessment(pos, moverIsWhite ? best.scoreCp : -best.scoreCp);
       let verdict: Verdict | null = null;
-      if (view > 0) {
-        verdict = await moveVerdict(engine, fenAt(rootFen, moves, view - 1), moves[view - 1], depth);
+      if (effView > 0 && fullUcis[effView - 1]) {
+        verdict = await moveVerdict(engine, fenAt(rootFen, fullUcis, effView - 1), fullUcis[effView - 1], depth);
       }
       // alternatives within an inaccuracy of best stay "good moves"; blunders are dropped
       const others: OtherLine[] = [];
@@ -190,11 +248,11 @@ export default function App() {
       busy.current = false;
       setDecoding(false);
     }
-  }, [pos, posFen, depth, plies, view, rootFen, moves]);
+  }, [pos, posFen, depth, plies, effView, rootFen, fullUcis]);
 
   const runAnalyze = useCallback(async () => {
-    if (busy.current || !moves.length) return;
-    const key = `${rootFen}|${moves.join(',')}|d${depth}`;
+    if (busy.current || !fullUcis.length) return;
+    const key = `${rootFen}|${fullUcis.join(',')}|d${depth}`;
     const cached = analysisCache.current.get(key);
     if (cached) {
       setRows(cached);
@@ -208,7 +266,7 @@ export default function App() {
       const engine = await getEngine();
       setEngineName(engine.info.name);
       const out = await analyzeGame(
-        engine, rootFen, moves, depth,
+        engine, rootFen, fullUcis, depth,
         (done, total) => setProgress(`${done}/${total}`),
       );
       analysisCache.current.set(key, out);
@@ -219,7 +277,13 @@ export default function App() {
       setAnalyzing(false);
       setProgress('');
     }
-  }, [rootFen, moves, depth]);
+  }, [rootFen, fullUcis, depth]);
+
+  const clearBranch = () => {
+    setBranch(null);
+    setInBranch(false);
+    setBview(0);
+  };
 
   const onTool = (t: Tool) => {
     if (t === 'new') {
@@ -229,6 +293,7 @@ export default function App() {
       setHeaders({});
       setDecode(null);
       setRows(null);
+      clearBranch();
     } else {
       setDialog({ kind: t });
     }
@@ -254,20 +319,24 @@ export default function App() {
     setHeaders({ FEN: fen });
     setDecode(null);
     setRows(null);
+    clearBranch();
     setPanel('decode');
     return null;
   };
 
   const evalCp = useMemo(() => {
-    if (view > 0 && rows && rows[view - 1]) return rows[view - 1].evalAfter;
+    if (effView > 0 && rows && rows[effView - 1]) return rows[effView - 1].evalAfter;
     try {
       return evaluateBoard(pos);
     } catch {
       return null;
     }
-  }, [rows, view, pos]);
+  }, [rows, effView, pos]);
 
-  const pgn = useMemo(() => exportPgn(rootFen, moves, headers), [rootFen, moves, headers]);
+  const pgn = useMemo(
+    () => exportPgn(rootFen, moves, headers, branch),
+    [rootFen, moves, headers, branch],
+  );
   const tabName = headers['White'] ? `${headers['White']} - ${headers['Black'] ?? '?'}` : 'New game';
 
   return (
@@ -293,14 +362,14 @@ export default function App() {
               onMove={playMove}
             />
             <NavButtons
-              view={view}
-              total={moves.length}
+              view={effView}
+              total={fullUcis.length}
               canDecode={!pos.isGameOver()}
               decoding={decoding}
               onFirst={() => gotoPly(0)}
-              onPrev={() => gotoPly(view - 1)}
-              onNext={() => gotoPly(view + 1)}
-              onLast={() => gotoPly(moves.length)}
+              onPrev={() => gotoEff(effView - 1)}
+              onNext={() => gotoEff(effView + 1)}
+              onLast={() => gotoEff(fullUcis.length)}
               onDecode={runDecode}
               onFlip={() => setOrientation((o) => (o === 'w' ? 'b' : 'w'))}
             />
@@ -316,12 +385,14 @@ export default function App() {
         {panel === 'decode' && <DecodeView data={decode?.fen === posFen ? decode : null} loading={decoding} />}
         {panel === 'game' && (
           <GameView
-            rootFen={rootFen} sans={sans} view={view} onGoto={gotoPly} result={headers['Result']}
+            rootFen={rootFen} sans={sans} view={effView} onGoto={gotoEff} result={headers['Result']}
             grades={rows ? Object.fromEntries(rows.map((r) => [r.ply, r.tag])) : undefined}
+            branchBase={branch?.base ?? null} branchTokens={branchTokens}
+            branchActive={inBranch} branchPos={bview} onBranchGoto={gotoBranch} onDropBranch={dropBranch}
           />
         )}
         {panel === 'graph' && (
-          <GraphView rows={rows} view={view} onGoto={gotoPly} onAnalyze={runAnalyze} analyzing={analyzing} progress={progress} hasMoves={moves.length > 0} />
+          <GraphView rows={rows} view={effView} onGoto={gotoEff} onAnalyze={runAnalyze} analyzing={analyzing} progress={progress} hasMoves={fullUcis.length > 0} />
         )}
         {panel === 'move' && <MoveInfoView fen={posFen} />}
         {panel === 'engine' && (
@@ -331,7 +402,7 @@ export default function App() {
           />
         )}
         {panel === 'stats' && (
-          <StatsView rows={rows} analyzing={analyzing} progress={progress} onAnalyze={runAnalyze} onGoto={gotoPly} hasMoves={moves.length > 0} />
+          <StatsView rows={rows} analyzing={analyzing} progress={progress} onAnalyze={runAnalyze} onGoto={gotoEff} hasMoves={fullUcis.length > 0} />
         )}
         {panel === 'info' && (
           <InfoView headers={headers} rootFen={rootFen} fen={posFen} moveCount={moves.length} pgn={pgn} />
@@ -372,6 +443,9 @@ export default function App() {
               setHeaders(h.headers);
               setDecode(null);
               setRows(null);
+              setBranch(null);
+              setInBranch(false);
+              setBview(0);
               setPanel('game');
               setDialog(null);
             }}

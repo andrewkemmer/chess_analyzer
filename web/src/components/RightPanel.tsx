@@ -130,9 +130,12 @@ export function md(s: string): string {
 
 const GRADE_CLASS: Record<string, string> = { Best: 'mv-best', Inaccuracy: 'mv-inacc', Mistake: 'mv-mist', Blunder: 'mv-blund' };
 
-export function GameView({ rootFen, sans, view, onGoto, result, grades }: {
+export function GameView({ rootFen, sans, view, onGoto, result, grades, branchBase, branchTokens, branchActive, branchPos, onBranchGoto, onDropBranch }: {
   rootFen: string; sans: string[]; view: number; onGoto: (ply: number) => void; result?: string;
   grades?: Record<number, string>;
+  branchBase?: number | null; branchTokens?: string[];
+  branchActive?: boolean; branchPos?: number;
+  onBranchGoto?: (ply: number) => void; onDropBranch?: () => void;
 }) {
   const startTurn = rootFen.split(' ')[1] as 'w' | 'b';
   const startNo = parseInt(rootFen.split(' ')[5] || '1', 10);
@@ -145,19 +148,44 @@ export function GameView({ rootFen, sans, view, onGoto, result, grades }: {
     else if (last && last.n === n) last.b = i;
     else rows.push({ n, b: i });
   });
+  const branchAfter: Record<number, boolean> = {};
+  if (branchBase != null && (branchTokens?.length ?? 0)) {
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].w === branchBase || rows[i].b === branchBase) { branchAfter[i] = true; break; }
+    }
+    if (!Object.keys(branchAfter).length && rows.length) branchAfter[rows.length - 1] = true;
+  }
+  const mvCls = (idx: number) =>
+    'mv' + (view === idx + 1 && !branchActive ? ' cur' : '') + (grades && grades[idx + 1] ? ' ' + (GRADE_CLASS[grades[idx + 1]] ?? '') : '');
   return (
     <div className="card">
       <h3>Moves</h3>
       <div className="movelist">
         {rows.map((r, i) => (
-          <div key={i} className="moverow">
-            <span className="movenum">{r.n}{r.b == null && r.w == null ? '' : r.w != null && r.b == null ? '.' : r.w == null ? '...' : '.'}</span>
-            {r.w != null
-              ? <button className={'mv' + (view === r.w + 1 ? ' cur' : '') + (grades && grades[r.w + 1] ? ' ' + (GRADE_CLASS[grades[r.w + 1]] ?? '') : '')} onClick={() => onGoto(r.w! + 1)}>{sans[r.w]}</button>
-              : <span />}
-            {r.b != null
-              ? <button className={'mv' + (view === r.b + 1 ? ' cur' : '') + (grades && grades[r.b + 1] ? ' ' + (GRADE_CLASS[grades[r.b + 1]] ?? '') : '')} onClick={() => onGoto(r.b! + 1)}>{sans[r.b]}</button>
-              : <span />}
+          <div key={i} style={{ display: 'contents' }}>
+            <div className="moverow">
+              <span className="movenum">{r.n}{r.b == null && r.w == null ? '' : r.w != null && r.b == null ? '.' : r.w == null ? '...' : '.'}</span>
+              {r.w != null
+                ? <button className={mvCls(r.w)} onClick={() => onGoto(r.w! + 1)}>{sans[r.w]}</button>
+                : <span />}
+              {r.b != null
+                ? <button className={mvCls(r.b)} onClick={() => onGoto(r.b! + 1)}>{sans[r.b]}</button>
+                : <span />}
+            </div>
+            {branchAfter[i] && branchBase != null && (branchTokens?.length ?? 0) > 0 && (
+              <div className="variation">
+                <span className="muted">( •</span>
+                {(branchTokens ?? []).map((t, k) => (
+                  <button
+                    key={k}
+                    className={'mv' + (branchActive && branchPos === branchBase + k + 1 ? ' cur' : '')}
+                    onClick={() => onBranchGoto?.(branchBase + k + 1)}
+                  >{t}</button>
+                ))}
+                <button className="var-x" title="Drop this sideline" onClick={() => onDropBranch?.()}>✕</button>
+                <span className="muted">)</span>
+              </div>
+            )}
           </div>
         ))}
         {result && <div className="moverow"><span className="movenum" /><span><strong>{result}</strong></span></div>}
@@ -330,7 +358,7 @@ export function StatsView({ rows, analyzing, progress, onAnalyze, onGoto, hasMov
             <span className="stat-ply">{r.ply}.</span>
             <span className="stat-san">{r.san}</span>
             <span className={'tag sm ' + (TAG_CLASS[r.tag] ?? '')}>{r.tag}</span>
-            <span className="muted">{formatEval(r.evalAfter)}{r.bestSan !== r.san ? ` (was ${r.bestSan})` : ''}</span>
+            <span className="muted">{formatEval(r.evalAfter)}{r.bestSan !== r.san ? ` (was ${r.bestSan})` : ''} · loss {(r.lossCp / 100).toFixed(2)}</span>
           </button>
         ))}
       </div>
@@ -356,8 +384,10 @@ export function InfoView({ headers, rootFen, fen, moveCount, pgn }: {
       <h3>Game info</h3>
       <p><strong>{headers['White'] ?? 'White?'}</strong> vs <strong>{headers['Black'] ?? 'Black?'}</strong></p>
       <p className="muted">
-        {headers['Event'] ?? ''} · {headers['Site'] ?? ''} · {headers['Date'] ?? ''} · {moveCount} plies
-        {headers['Result'] ? ` · ${headers['Result']}` : ''}
+        {Object.entries(headers)
+          .filter(([k, v]) => v && k !== 'FEN' && k !== 'SetUp' && k !== 'White' && k !== 'Black')
+          .map(([k, v]) => `${k}: ${v}`)
+          .join(' · ')}{moveCount ? ` · ${moveCount} plies` : ''}
       </p>
       <h4>Current FEN</h4>
       <code className="fen">{fen}</code>

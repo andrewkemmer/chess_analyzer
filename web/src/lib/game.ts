@@ -102,8 +102,29 @@ export function parseImport(text: string): { rootFen: string; moves: string[]; h
   }
 }
 
-/** Build a PGN string for export/download. */
-export function exportPgn(rootFen: string, moves: string[], headers: Record<string, string>): string {
+export interface Branch { base: number; line: string[] }
+
+/** Tokens with move numbers for a UCI line played from `fromFen`. */
+export function numberedSans(fromFen: string, ucis: string[]): string[] {
+  const c = new Chess(fromFen);
+  let n = parseInt(fromFen.split(' ')[5] || '1', 10);
+  let turn = fromFen.split(' ')[1] as 'w' | 'b';
+  const out: string[] = [];
+  for (const u of ucis) {
+    try {
+      const san = c.move({ from: u.slice(0, 2) as never, to: u.slice(2, 4) as never, promotion: (u[4] as never) }).san;
+      out.push(turn === 'w' ? `${n}. ${san}` : (out.length === 0 && n > 0 ? `${n}... ${san}` : san));
+      if (turn === 'b') n++;
+      turn = turn === 'w' ? 'b' : 'w';
+    } catch {
+      break;
+    }
+  }
+  return out;
+}
+
+/** Build a PGN string for export/download, with an optional sideline variation. */
+export function exportPgn(rootFen: string, moves: string[], headers: Record<string, string>, branch?: Branch | null): string {
   const c = new Chess(rootFen);
   for (const u of moves) {
     try {
@@ -121,5 +142,16 @@ export function exportPgn(rootFen: string, moves: string[], headers: Record<stri
     const entries = Object.entries(h).filter(([, v]) => v);
     if (entries.length) c.header(...entries.flat());
   } catch { /* ignore */ }
-  return c.pgn();
+  if (!branch?.line.length) return c.pgn();
+  // manual movetext so the sideline survives as a ( ... ) variation
+  const main = numberedSans(rootFen, moves);
+  const baseFen = fenAt(rootFen, moves, Math.min(branch.base, moves.length));
+  const side = numberedSans(baseFen, branch.line).join(' ');
+  const idx = Math.min(branch.base, main.length);
+  main.splice(idx, 0, `( ${side} )`);
+  const result = h['Result'] ?? '*';
+  const head = c.header()
+    ? Object.entries(c.header() as Record<string, string>).filter(([, v]) => v).map(([k, v]) => `[${k} "${v}"]`).join('\n')
+    : '';
+  return `${head}\n\n${main.join(' ')} ${result}`.trim();
 }
