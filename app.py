@@ -22,8 +22,8 @@ from chess_explain import (
 
 st.set_page_config(page_title="Chess Explainer", layout="wide", page_icon="♞")
 
-LIGHT_SQ, DARK_SQ = "#f0d9b5", "#b58863"
-LAST_L, LAST_D = "#f6f669", "#c9c84f"
+LIGHT_SQ, DARK_SQ = "#f3f3f3", "#9faab2"
+LAST_L, LAST_D = "#f7f769", "#b9bd58"
 SEL = "#829769"
 CHECK = "#ff6b5e"
 
@@ -165,6 +165,17 @@ section[data-testid="stSidebar"] button:hover {{
   background:#14304d !important; border-color:#3f6ea5 !important;}}
 section[data-testid="stSidebar"] button p, section[data-testid="stSidebar"] button span {{
   color:#f2f5f9 !important;}}
+section[data-testid="stSidebar"] {{width:102px !important; min-width:102px !important;}}
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{padding:0.6rem 0.45rem;}}
+section[data-testid="stSidebar"] button {{text-align:center !important;}}
+section[data-testid="stSidebar"] button p {{text-align:center !important; font-size:19px !important;}}
+section[data-testid="stSidebar"] h2 {{font-size:15px !important; text-align:center;}}
+.st-key-first, .st-key-back, .st-key-fwd, .st-key-last,
+.st-key-flip_btn, .st-key-ret_btn, .st-key-menu_btn {{text-align:center;}}
+.st-key-first button, .st-key-back button, .st-key-fwd button, .st-key-last button,
+.st-key-flip_btn button, .st-key-ret_btn button, .st-key-menu_btn button {{
+  border-radius:50% !important; width:40px !important; height:40px !important;
+  min-height:0 !important; padding:0 !important; margin:0 auto !important;}}
 button[data-testid="stBaseButton-primary"] {{
   background:#ffcc44 !important; border:1px solid #e6b800 !important; color:#1a1a1a !important;}}
 button[data-testid="stBaseButton-primary"] p {{color:#1a1a1a !important;}}
@@ -209,7 +220,7 @@ def board_css(b: chess.Board, sel, targets: dict, lastmove, check_sq, bestpair) 
             css.append(f".st-key-sq_{name} button {{background:{bg} !important;}}")
             p = b.piece_at(sq)
             if p is None and sq in targets:
-                css.append(f".st-key-sq_{name} button p {{color:rgba(20,40,20,.55) !important; font-size:16px !important;}}")
+                css.append(f".st-key-sq_{name} button p {{color:rgba(30,60,50,.6) !important; font-size:16px !important;}}")
             if p is not None:
                 code = p.symbol().lower() + ("_w" if p.color == chess.WHITE else "_b")
                 uri = PIECE_CSS.get(code, "")
@@ -390,11 +401,44 @@ def captured_html(b: chess.Board) -> str:
     return f"<div style='font-size:15px;opacity:.9'>Captured — White took {took_by_w or '—'} · Black took {took_by_b or '—'}{lead}</div>"
 
 
+def captured_rail_html(b: chess.Board) -> str:
+    """Vertical captured-material rail (DecodeChess right-of-board panel)."""
+    start = {"P": 8, "N": 2, "B": 2, "R": 2, "Q": 1}
+    have_w = dict(start)
+    have_b = {k.lower(): v for k, v in start.items()}
+    for p in b.piece_map().values():
+        key = p.symbol()
+        d = have_w if p.color == chess.WHITE else have_b
+        if key in d:
+            d[key] -= 1
+    def imgs(keys: str, missing: dict) -> str:
+        out = []
+        for k in keys:
+            code = k + ("_b" if k.islower() else "_w")
+            out.append(
+                f"<img src=\"{PIECE_CSS.get(code, '')}\" "
+                f"style='width:24px;height:24px;margin:1px'/>" * max(0, missing[k]))
+        return "".join(out) or "<span style='opacity:.4'>—</span>"
+    vals = {"P": 1, "N": 3, "B": 3, "R": 5, "Q": 9}
+    diff = (sum(vals[k] * max(0, have_b[k.lower()]) for k in vals)
+            - sum(vals[k] * max(0, have_w[k]) for k in vals))
+    lead = f"White +{diff}" if diff > 0 else (f"Black +{-diff}" if diff < 0 else "")
+    return ("<div style='border:1px solid #dfe3e8;border-radius:8px;background:#ffffff;"
+            "padding:8px 4px;text-align:center;min-height:416px'>"
+            f"<div style='font-size:11px;font-weight:700'>TAKEN</div>"
+            f"<div>{imgs('pnbrq', have_b)}</div>"
+            "<div style='font-size:16px;margin:6px 0'>⚑</div>"
+            f"<div>{imgs('PNBRQ', have_w)}</div>"
+            f"<div style='font-size:11px;font-weight:700;margin-top:4px'>{lead}</div></div>")
+
+
 # ---------------------------------------------------------------- sidebar (mirrors DecodeChess icon rail)
 st.markdown(theme_css(), unsafe_allow_html=True)
 with st.sidebar:
-    st.markdown("## ♛ Chess Explainer")
-    with st.popover("⚔ Play", use_container_width=True):
+    st.markdown("<div style='text-align:center;line-height:1.15'><div style='font-size:30px'>♛</div>"
+                "<div style='font-size:12px;font-weight:800;color:#f2f5f9'>Chess<br>Explainer</div></div>",
+                unsafe_allow_html=True)
+    with st.popover("⚔", help="Play against the engine", use_container_width=True):
         st.markdown("Play against the engine from the current board.")
         st.session_state.play_mode = st.checkbox("Engine replies to my moves",
                                                  value=st.session_state.play_mode)
@@ -405,7 +449,7 @@ with st.sidebar:
         st.session_state.play_color = st.selectbox(
             "Engine plays", ["Black", "White"],
             index=0 if st.session_state.play_color == "Black" else 1)
-    with st.popover("⤓ Import", use_container_width=True):
+    with st.popover("⤓", help="Import a PGN game", use_container_width=True):
         st.markdown("Paste a PGN game to decode it move by move.")
         pgn_in = st.text_area("PGN", height=100, key="pgn_in",
                               placeholder="1. e4 e5 2. Nf3 ...")
@@ -421,7 +465,7 @@ with st.sidebar:
                     st.rerun()
             except Exception as e:
                 st.error(f"PGN error: {e}")
-    with st.popover("⚙ Set Up", use_container_width=True):
+    with st.popover("⚙", help="Set up a position (FEN)", use_container_width=True):
         fen_in = st.text_input("FEN", value=cur().fen(), key="fen_in")
         if st.button("Load FEN", key="load_fen", use_container_width=True):
             try:
@@ -433,24 +477,24 @@ with st.sidebar:
         if st.button("Reset to start", key="reset_board", use_container_width=True):
             goto_root(chess.STARTING_FEN)
             st.rerun()
-    with st.popover("★ Examples", use_container_width=True):
+    with st.popover("★", help="Load famous examples", use_container_width=True):
         for name, fen in SAMPLES.items():
             if st.button(name, key=f"ex_{abs(hash(name)) % 10**8}",
                          use_container_width=True):
                 goto_root(fen)
                 st.rerun()
-    with st.popover("🕘 History", use_container_width=True):
+    with st.popover("🕘", help="Position history", use_container_width=True):
         for i, f in enumerate(reversed(st.session_state.visited[-8:])):
             if st.button(f"{len(st.session_state.visited)-i}. {f[:38]}…",
                          key=f"hist_{i}", use_container_width=True):
                 goto_root(f)
                 st.rerun()
-    with st.popover("❓ Help", use_container_width=True):
+    with st.popover("❓", help="How to read a decode", use_container_width=True):
         st.markdown("**How to read a decode**\n1. Press **🔍 Decode** under the board\n"
                     "2. Read the assessment + best line\n3. Open *is good because it* bullets\n"
                     "4. Check *Major threats* and *How to find the best move*\n"
                     "5. Click your own pieces on the board to move")
-    st.checkbox("🌙 Dark Mode", key="dark")
+    st.checkbox("🌙", key="dark", help="Dark mode")
 
 # ---------------------------------------------------------------- main
 if st.session_state.tour:
@@ -484,16 +528,15 @@ else:
     eval_white = evaluate_board(b)
 
 with left:
-    cap = captured_html(b)
-    if cap:
-        st.markdown(cap, unsafe_allow_html=True)
-    eb, bb = st.columns([0.7, 8])
+    eb, bb, rail = st.columns([0.6, 7.2, 1.7])
     with eb:
         st.markdown(evalbar_html(eval_white), unsafe_allow_html=True)
     with bb:
         dec = st.session_state.decode
         best_uci = (dec.get("best_uci") if dec and dec.get("fen") == b.fen() else None)
         render_board(b, best_uci)
+    with rail:
+        st.markdown(captured_rail_html(b), unsafe_allow_html=True)
     tb = st.columns([1, 1, 1, 1, 4, 1, 1, 1])
     with tb[0]:
         if st.button("|◀", key="first", help="Go to start",
