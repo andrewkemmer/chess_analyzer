@@ -130,24 +130,38 @@ export function md(s: string): string {
 
 const GRADE_CLASS: Record<string, string> = { Best: 'mv-best', Inaccuracy: 'mv-inacc', Mistake: 'mv-mist', Blunder: 'mv-blund' };
 
-export function GameView({ rootFen, sans, view, onGoto, result, grades, branchBase, branchTokens, branchActive, branchPos, onBranchGoto, onDropBranch }: {
+function moveRows(rootFen: string, sans: string[]): Array<{ n: number; w?: number; b?: number }> {
+  const startTurn = rootFen.split(' ')[1] as 'w' | 'b';
+  const startNo = parseInt(rootFen.split(' ')[5] || '1', 10);
+  const out: Array<{ n: number; w?: number; b?: number }> = [];
+  sans.forEach((_, i) => {
+    const turnIsW = (i + (startTurn === 'w' ? 0 : 1)) % 2 === 0;
+    const n = startNo + Math.floor((i + (startTurn === 'w' ? 0 : 1)) / 2);
+    const last = out[out.length - 1];
+    if (turnIsW) out.push({ n, w: i });
+    else if (last && last.n === n) last.b = i;
+    else out.push({ n, b: i });
+  });
+  return out;
+}
+
+function movePrefix(rootFen: string, ply: number): string {
+  const startTurn = rootFen.split(' ')[1] as 'w' | 'b';
+  const startNo = parseInt(rootFen.split(' ')[5] || '1', 10);
+  const off = startTurn === 'w' ? 0 : 1;
+  const n = startNo + Math.floor((ply - 1 + off) / 2);
+  return (ply - 1 + off) % 2 === 0 ? `${n}. ` : `${n}... `;
+}
+
+export function GameView({ rootFen, sans, view, onGoto, result, grades, analysis, fallbackEval, branchBase, branchTokens, branchActive, branchPos, onBranchGoto, onDropBranch }: {
   rootFen: string; sans: string[]; view: number; onGoto: (ply: number) => void; result?: string;
   grades?: Record<number, string>;
+  analysis?: AnalysisRow[] | null; fallbackEval?: number | null;
   branchBase?: number | null; branchTokens?: string[];
   branchActive?: boolean; branchPos?: number;
   onBranchGoto?: (ply: number) => void; onDropBranch?: () => void;
 }) {
-  const startTurn = rootFen.split(' ')[1] as 'w' | 'b';
-  const startNo = parseInt(rootFen.split(' ')[5] || '1', 10);
-  const rows: Array<{ n: number; w?: number; b?: number }> = [];
-  sans.forEach((_, i) => {
-    const turnIsW = (i + (startTurn === 'w' ? 0 : 1)) % 2 === 0;
-    const n = startNo + Math.floor((i + (startTurn === 'w' ? 0 : 1)) / 2);
-    const last = rows[rows.length - 1];
-    if (turnIsW) rows.push({ n, w: i });
-    else if (last && last.n === n) last.b = i;
-    else rows.push({ n, b: i });
-  });
+  const rows = moveRows(rootFen, sans);
   const branchAfter: Record<number, boolean> = {};
   if (branchBase != null && (branchTokens?.length ?? 0)) {
     for (let i = 0; i < rows.length; i++) {
@@ -157,9 +171,40 @@ export function GameView({ rootFen, sans, view, onGoto, result, grades, branchBa
   }
   const mvCls = (idx: number) =>
     'mv' + (view === idx + 1 && !branchActive ? ' cur' : '') + (grades && grades[idx + 1] ? ' ' + (GRADE_CLASS[grades[idx + 1]] ?? '') : '');
+  // per-move insight, DecodeChess Move-Info style: `24. Qxa8+ +#4 ✓Best move`
+  const insight = (() => {
+    const branchTok = branchActive && branchBase != null && (branchTokens?.length ?? 0)
+      ? branchTokens![Math.max(0, branchPos! - branchBase - 1)]
+      : null;
+    if (branchTok && fallbackEval != null) {
+      return <p className="insight-line">{branchTok} {formatEval(fallbackEval)} <span className="muted">· exploratory sideline</span></p>;
+    }
+    const r = analysis && view > 0 ? analysis[view - 1] : null;
+    if (r) {
+      const pre = movePrefix(rootFen, r.ply);
+      const ev = formatEval(r.evalAfter);
+      if (r.tag === 'Best') {
+        return <p className="insight-line">{pre}{r.san} {ev} <span className={'tag sm ' + TAG_CLASS.Best}>✓Best move</span></p>;
+      }
+      const sym = TAG_SYMBOL[r.tag] ?? '';
+      const alt = statAlt(r);
+      return (
+        <p className="insight-line">
+          {pre}{r.san}{sym ? ` ${sym}` : ''} {ev}{' '}
+          {sym ? <span className={'tag sm ' + (TAG_CLASS[r.tag] ?? '')}>{r.tag.toLowerCase()}</span> : null}{' '}
+          (loss: {formatLoss(r.lossCp)}){alt ? ` | ${alt}` : ''}
+        </p>
+      );
+    }
+    if (fallbackEval == null) return null;
+    if (view <= 0) return <p className="insight-line">... {formatEval(fallbackEval)} <span className="muted">· starting position</span></p>;
+    const san = sans[view - 1] ?? '';
+    return <p className="insight-line">{movePrefix(rootFen, view)}{san} {formatEval(fallbackEval)} <span className="muted">· Analyze all moves (Stats tab) for grades</span></p>;
+  })();
   return (
     <div className="card">
       <h3>Moves</h3>
+      {insight && <div className="insight">{insight}</div>}
       <div className="movelist">
         {rows.map((r, i) => (
           <div key={i} style={{ display: 'contents' }}>

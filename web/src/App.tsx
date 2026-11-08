@@ -390,6 +390,7 @@ export default function App() {
         {panel === 'game' && (
           <GameView
             rootFen={rootFen} sans={sans} view={effView} onGoto={gotoEff} result={headers['Result']}
+            analysis={rows} fallbackEval={(() => { try { return evaluateBoard(pos); } catch { return null; } })()}
             grades={rows ? Object.fromEntries(rows.map((r) => [r.ply, r.tag])) : undefined}
             branchBase={branch?.base ?? null} branchTokens={branchTokens}
             branchActive={inBranch} branchPos={bview} onBranchGoto={gotoBranch} onDropBranch={dropBranch}
