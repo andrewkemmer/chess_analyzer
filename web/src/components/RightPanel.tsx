@@ -86,7 +86,7 @@ export function DecodeView({ data, loading }: { data: DecodeData | null; loading
       {data.verdict && (
         <div className="card">
           <h3>Your move verdict</h3>
-          <p><strong>{data.verdict.label}</strong> — <span dangerouslySetInnerHTML={{ __html: md(data.verdict.sentence) }} /></p>
+          <p><strong>{gradeSymbol(data.verdict.label)} {data.verdict.label}</strong> — <span dangerouslySetInnerHTML={{ __html: md(data.verdict.sentence) }} /></p>
         </div>
       )}
       <div className="card">
@@ -232,7 +232,7 @@ export function GraphView({ rows, view, onGoto, onAnalyze, analyzing, progress, 
             cx={chart!.xs(i)}
             cy={chart!.ys(r.evalAfter)}
             r={view === r.ply ? 5 : 2.5}
-            className={view === r.ply ? 'g-cur' : r.tag === 'Best' ? 'g-ok' : 'g-bad'}
+            className={view === r.ply ? 'g-cur' : (r.tag === 'Best' || r.tag === 'Good') ? 'g-ok' : 'g-bad'}
             onClick={() => onGoto(r.ply)}
           >
             <title>{`${r.ply}. ${r.san} — ${r.tag} (${formatEval(r.evalAfter)})`}</title>
@@ -325,7 +325,28 @@ export function EngineView({ name, engineDepth, engineNps, depth, setDepth, plie
 
 /* ---------------------------------------------------------- stats */
 
-const TAG_CLASS: Record<string, string> = { Best: 'tag-best', Inaccuracy: 'tag-inacc', Mistake: 'tag-mist', Blunder: 'tag-blund' };
+const TAG_CLASS: Record<string, string> = { Best: 'tag-best', Good: '', Inaccuracy: 'tag-inacc', Mistake: 'tag-mist', Blunder: 'tag-blund' };
+
+const TAG_SYMBOL: Record<string, string> = { Best: '✓', Good: '', Inaccuracy: '?!', Mistake: '?', Blunder: '??' };
+
+function gradeSymbol(label: string): string {
+  if (/best/i.test(label)) return '✓';
+  if (/inaccuracy/i.test(label)) return '?!';
+  if (/mistake/i.test(label)) return '?';
+  if (/blunder/i.test(label)) return '??';
+  return '';
+}
+
+export function statAlt(r: AnalysisRow): string {
+  if (r.tag === 'Best' || r.bestSan === r.san) return '';
+  if (r.tag === 'Inaccuracy' || r.tag === 'Mistake' || r.tag === 'Blunder') return `Best alternative: ${r.bestSan}`;
+  if (r.lossCp >= 1) return `Alternative move: ${r.bestSan}`;
+  return '';
+}
+
+export function formatLoss(lossCp: number): string {
+  return Number((lossCp / 100).toFixed(2)).toString();
+}
 
 export function StatsView({ rows, analyzing, progress, onAnalyze, onGoto, hasMoves }: {
   rows: AnalysisRow[] | null; analyzing: boolean; progress: string;
@@ -342,25 +363,42 @@ export function StatsView({ rows, analyzing, progress, onAnalyze, onGoto, hasMov
       </div>
     );
   }
-  const counts: Record<string, number> = {};
-  for (const r of rows) counts[r.tag] = (counts[r.tag] ?? 0) + 1;
+  const sideCount = (side: string, tag: string) => rows.filter((r) => r.side === side && r.tag === tag).length;
+  const sideLoss = (side: string) => {
+    const rs = rows.filter((r) => r.side === side);
+    if (!rs.length) return '0';
+    return (rs.reduce((a, r) => a + r.lossCp, 0) / rs.length / 100).toFixed(3);
+  };
+  const statRows: Array<[string, string, string]> = [
+    ['Inaccuracies', String(sideCount('White', 'Inaccuracy')), String(sideCount('Black', 'Inaccuracy'))],
+    ['Mistakes', String(sideCount('White', 'Mistake')), String(sideCount('Black', 'Mistake'))],
+    ['Blunders', String(sideCount('White', 'Blunder')), String(sideCount('Black', 'Blunder'))],
+    ['Average loss', sideLoss('White'), sideLoss('Black')],
+  ];
   return (
     <div className="card">
       <h3>Game statistics</h3>
-      <p>
-        {Object.entries(counts).map(([t, n]) => (
-          <span key={t} className={'tag ' + (TAG_CLASS[t] ?? '')}>{t}: {n}</span>
-        ))}
-      </p>
+      <table className="stattable-grid">
+        <thead><tr><th /><th>White</th><th>Black</th></tr></thead>
+        <tbody>
+          {statRows.map(([label, w, b]) => (
+            <tr key={label}><td>{label}</td><td>{w}</td><td>{b}</td></tr>
+          ))}
+        </tbody>
+      </table>
       <div className="stattable">
-        {rows.map((r) => (
-          <button key={r.ply} className="statrow" onClick={() => onGoto(r.ply)} title={`Go to move ${r.ply}`}>
-            <span className="stat-ply">{r.ply}.</span>
-            <span className="stat-san">{r.san}</span>
-            <span className={'tag sm ' + (TAG_CLASS[r.tag] ?? '')}>{r.tag}</span>
-            <span className="muted">{formatEval(r.evalAfter)}{r.bestSan !== r.san ? ` (was ${r.bestSan})` : ''} · loss {(r.lossCp / 100).toFixed(2)}</span>
-          </button>
-        ))}
+        {rows.map((r) => {
+          const alt = statAlt(r);
+          const sym = TAG_SYMBOL[r.tag] ?? '';
+          return (
+            <button key={r.ply} className="statrow" onClick={() => onGoto(r.ply)} title={`Go to move ${r.ply}`}>
+              <span className="stat-ply">{r.ply}.</span>
+              <span className="stat-san">{r.san}</span>
+              <span className={'tag sm ' + (TAG_CLASS[r.tag] ?? '')}>{sym ? `${sym} ` : ''}{r.tag}</span>
+              <span className="muted">{formatEval(r.evalAfter)}{r.tag === 'Best' ? '' : ` (loss: ${formatLoss(r.lossCp)})`}{alt ? ` · ${alt}` : ''}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );

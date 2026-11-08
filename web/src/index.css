@@ -170,6 +170,10 @@ body {
 .g-bad { fill: #d23b3b; cursor: pointer; }
 .g-cur { fill: var(--accent); stroke: #7a5c00; cursor: pointer; }
 
+.stattable-grid { border-collapse: collapse; margin: 4px 0 10px; font-size: 13px; }
+.stattable-grid th, .stattable-grid td { border: 1px solid #dde3e8; padding: 3px 12px; text-align: right; }
+.stattable-grid th:first-child, .stattable-grid td:first-child { text-align: left; }
+.stattable-grid th { background: #eef1f4; }
 .stattable { display: flex; flex-direction: column; gap: 2px; max-height: 420px; overflow-y: auto; }
 .statrow { display: grid; grid-template-columns: 34px 64px 92px 1fr; gap: 4px; align-items: center; border: none; background: none; padding: 4px 2px; cursor: pointer; font-size: 13px; text-align: left; border-radius: 6px; }
 .statrow:hover { background: #eef3f7; }

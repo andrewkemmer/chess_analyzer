@@ -165,6 +165,10 @@ export default function App() {
       const line = [...kept, uci];
       setBranch({ base: branch.base, line });
       setBview(branch.base + line.length);
+    } else if (view < moves.length && uci === moves[view]) {
+      // replaying the actual next move just advances — no sideline
+      setView(view + 1);
+      return;
     } else if (view < moves.length) {
       // deviate from the main line: keep it, ride a sideline instead
       setBranch({ base: view, line: [uci] });
@@ -229,7 +233,7 @@ export default function App() {
       const others: OtherLine[] = [];
       for (const pv of infos.slice(1)) {
         const lossCp = infos[0].scoreCp - pv.scoreCp;
-        if (lossCp > 120) continue;
+        if (lossCp > 100) continue;
         try {
           const c = new Chess(posFen);
           const applied = c.move({ from: pv.move.slice(0, 2) as never, to: pv.move.slice(2, 4) as never, promotion: (pv.move[4] as never) });

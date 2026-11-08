@@ -606,14 +606,23 @@ export function suggestPlans(chess: Chess, color: 'w' | 'b'): string[] {
 
 export function classifyLoss(lossCp: number): string | null {
   if (lossCp < 50) return null;
-  if (lossCp < 120) return 'Inaccuracy';
-  if (lossCp < 250) return 'Mistake';
+  if (lossCp < 100) return 'Inaccuracy';
+  if (lossCp < 200) return 'Mistake';
   return 'Blunder';
 }
 
+export function trim2(n: number): string {
+  return Number(n.toFixed(2)).toString();
+}
+
 export function formatEval(cp: number): string {
-  if (Math.abs(cp) >= 90000) return '#';
-  const sign = cp >= 0 ? '+' : '−';
+  if (Math.abs(cp) >= 90000) {
+    const n = Math.round(100000 - Math.abs(cp));
+    const s = cp >= 0 ? '+' : '-';
+    return n > 0 && n < 1000 ? `${s}#${n}` : `${s}#`;
+  }
+  if (Math.round(cp) === 0) return '0.00';
+  const sign = cp >= 0 ? '+' : '-';
   return `${sign}${(Math.abs(cp) / 100).toFixed(2)}`;
 }
 
@@ -731,24 +740,27 @@ export async function moveVerdict(
   const fullmove = parseInt(fen.split(' ')[5] || '1', 10);
   const prefix = mover === 'w' ? `${fullmove}. ` : `${fullmove}... `;
 
-  let label: string; let loss: number;
+  let label: string; let loss: number; let playedScore: number;
   if (playedUci === best.move) {
-    label = 'Best move'; loss = 0;
+    label = 'Best move'; loss = 0; playedScore = best.scoreCp;
   } else {
-    loss = Math.max(0, best.scoreCp - (await moveValue(engine, fen, playedUci, depth)));
+    playedScore = await moveValue(engine, fen, playedUci, depth);
+    loss = Math.max(0, best.scoreCp - playedScore);
+    if (Math.abs(best.scoreCp) >= 90000 || Math.abs(playedScore) >= 90000) loss = Math.min(loss, 500);
     label = classifyLoss(loss) ?? 'Good move';
   }
   const after = new Chess(fen);
   try {
     after.move({ from: playedUci.slice(0, 2) as never, to: playedUci.slice(2, 4) as never, promotion: (playedUci[4] as never) });
   } catch { /* keep root */ }
-  const evAfter = evaluateBoard(after);
-  const moverPov = mover === 'w' ? evAfter : -evAfter;
+  // searched value of the resulting position (mover POV), not the static eval
+  const moverPov = playedScore;
+  const evWhite = mover === 'w' ? moverPov : -moverPov;
   let sentence: string;
   if (playedUci === best.move) {
-    sentence = `${prefix}${san} is the best move — ${moverName} keeps ${sideState(moverPov)} (${(evAfter / 100 >= 0 ? '+' : '')}${(evAfter / 100).toFixed(2)}).`;
+    sentence = `${prefix}${san} is the best move — ${moverName} keeps ${sideState(moverPov)} (${formatEval(evWhite)}).`;
   } else if (label === 'Good move') {
-    sentence = `${prefix}${san} is a good move (only ${loss}cp off best). ${moverName} keeps ${sideState(moverPov)}.`;
+    sentence = `${prefix}${san} is a good move (only ${trim2(loss / 100)} off best). ${moverName} keeps ${sideState(moverPov)}.`;
   } else {
     const art = label === 'Inaccuracy' ? 'an' : 'a';
     const bbest = new Chess(fen);
@@ -762,7 +774,7 @@ export async function moveVerdict(
         else if (bbest.isCheck()) reason = 'It misses the strongest attack';
       }
     } catch { /* keep default */ }
-    sentence = `${prefix}${san} is ${art} ${label.toLowerCase()} (${-loss}cp). ${reason} and now ${moverName} has ${sideState(moverPov)}.`;
+    sentence = `${prefix}${san} is ${art} ${label.toLowerCase()} (loss: ${trim2(loss / 100)}). ${reason} and now ${moverName} has ${sideState(moverPov)}.`;
   }
   const ref = after.isGameOver() ? [] : await bestLine(engine, after.fen(), depth, plies);
   return { san, bestSan, label, lossCp: loss, sentence, refutation: ref };
@@ -783,7 +795,6 @@ export async function analyzeGame(
   for (let i = 0; i < ucis.length; i++) {
     const u = ucis[i];
     const mover = b.turn();
-    const evBefore = evaluateBoard(b);
     const cands = await engine.analyze(b.fen(), depth, 1);
     const best = cands[0]?.move ?? u;
     const bestScore = cands[0]?.scoreCp ?? 0;
@@ -800,12 +811,16 @@ export async function analyzeGame(
     } catch {
       bestSan = best;
     }
-    const loss = u === best ? 0 : Math.max(0, bestScore - (await moveValue(engine, b.fen(), u, depth)));
-    const tag = loss < 50 ? 'Best' : (classifyLoss(loss) ?? 'Best');
+    const playedScore = u === best ? bestScore : await moveValue(engine, b.fen(), u, depth);
+    let loss = u === best ? 0 : Math.max(0, bestScore - playedScore);
+    // mate on the board compresses to a 5-pawn loss so one move can't nuke the averages
+    if (Math.abs(bestScore) >= 90000 || Math.abs(playedScore) >= 90000) loss = Math.min(loss, 500);
+    const tag = u === best ? 'Best' : (classifyLoss(loss) ?? 'Good');
     b.move({ from: u.slice(0, 2) as never, to: u.slice(2, 4) as never, promotion: (u[4] as never) });
+    const wmul = mover === 'w' ? 1 : -1;
     rows.push({
       ply: i + 1, san, side: mover === 'w' ? 'White' : 'Black',
-      bestSan, lossCp: loss, tag, evalBefore: evBefore, evalAfter: evaluateBoard(b),
+      bestSan, lossCp: loss, tag, evalBefore: wmul * bestScore, evalAfter: wmul * playedScore,
     });
     onProgress?.(i + 1, ucis.length);
   }
