@@ -3,6 +3,7 @@
  * anything needing search depth uses the Stockfish WASM worker. */
 
 import { Chess, SQUARES } from 'chess.js';
+import type { Move } from 'chess.js';
 import type { PvInfo } from './engine';
 
 export const MATE_CP = 100000;
@@ -604,6 +605,102 @@ export function suggestPlans(chess: Chess, color: 'w' | 'b'): string[] {
   return plans.slice(0, 4).length ? plans.slice(0, 4) : ['Improve your worst-placed piece and restrict enemy counterplay.'];
 }
 
+/* ---------------- format-B game insight (prospective) ---------------- */
+
+const mvKey = (m: { from: string; to: string; promotion?: string }): string =>
+  `${m.from}${m.to}${m.promotion ?? ''}`;
+
+function sideMoves(fen: string, side: 'w' | 'b'): Move[] {
+  const parts = fen.split(' ');
+  parts[1] = side;
+  try {
+    return new Chess(parts.join(' ')).moves({ verbose: true });
+  } catch {
+    return [];
+  }
+}
+
+function centrality(uci: string): number {
+  const f = uci.charCodeAt(2) - 97;
+  const r = uci.charCodeAt(3) - 49;
+  return Math.abs(f - 3.5) + Math.abs(r - 3.5);
+}
+
+function orderLost(items: { san: string; uci: string }[], threatSans: Set<string>): string[] {
+  const rank = (s: string): number => {
+    if (/[+#]$/.test(s)) return 0;
+    if (threatSans.has(s)) return 1;
+    if (/x/.test(s)) return 2;
+    return 3;
+  };
+  return items
+    .slice()
+    .sort((a, z) => rank(a.san) - rank(z.san) || centrality(a.uci) - centrality(z.uci) || (a.san < z.san ? -1 : 1))
+    .map((m) => m.san);
+}
+
+export interface Consequences {
+  cons: string[]; prosDenied: string[]; oppThreats: Threat[]; extra: boolean;
+}
+
+/** Moves each side loses by playing `uci` now: own plans ruled out (Cons)
+ *  and opponent replies denied (Pros). Lists are capped at 2 with `extra`
+ *  set when either side loses more — DecodeChess shows 2 + "More...". */
+export function moveConsequences(fen: string, uci: string): Consequences {
+  const empty: Consequences = { cons: [], prosDenied: [], oppThreats: [], extra: false };
+  const before = new Chess(fen);
+  const mover = before.turn();
+  const foe = opp(mover);
+  const after = new Chess(fen);
+  try {
+    after.move({ from: uci.slice(0, 2) as never, to: uci.slice(2, 4) as never, promotion: (uci[4] as never) });
+  } catch {
+    return empty;
+  }
+  const playedKey = uci.slice(0, 4) + (uci.length > 4 ? uci[4] : '');
+  const lostFor = (side: 'w' | 'b'): { san: string; uci: string }[] => {
+    const bList = side === mover ? before.moves({ verbose: true }) : sideMoves(fen, side);
+    const aList = sideMoves(after.fen(), side);
+    const aKeys = new Set(aList.map(mvKey));
+    const aSans = new Set(aList.map((m) => m.san));
+    // Ruled out means GONE: a move whose SAN is still available afterwards
+    // (e.g. Qxd5 is still on for the queen after 17...Qd6) is not ruled out.
+    return bList
+      .filter((m) => mvKey(m) !== playedKey && !aKeys.has(mvKey(m)) && !aSans.has(m.san))
+      .map((m) => ({ san: m.san, uci: mvKey(m) }));
+  };
+  const oppBefore = opponentThreats(before);
+  const consAll = orderLost(lostFor(mover), new Set());
+  const prosAll = orderLost(lostFor(foe), new Set(oppBefore.map((t) => t.san)));
+  return {
+    cons: consAll.slice(0, 2),
+    prosDenied: prosAll.slice(0, 2),
+    oppThreats: oppBefore,
+    extra: consAll.length > 2 || prosAll.length > 2,
+  };
+}
+
+export function gradePhrase(label: string): string {
+  if (/best/i.test(label)) return 'the best move';
+  if (/good/i.test(label)) return 'a good move';
+  if (/inaccuracy/i.test(label)) return 'an inaccuracy';
+  if (/mistake/i.test(label)) return 'a mistake';
+  if (/blunder/i.test(label)) return 'a blunder';
+  return `a ${label.toLowerCase()}`;
+}
+
+export function capFirst(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+export interface Prospective {
+  prefix: string; san: string; grade: string; evalStr: string; lossStr: string | null;
+  replyKind: 'worthwhile' | 'respond' | null; replySan: string; oppName: string;
+  threatSan: string | null; showOpportunity: boolean; bestSan: string;
+  extraMover: string; extraState: string; showExtraLoss: boolean;
+  cons: string[]; pros: string[]; showMore: boolean;
+}
+
 export function classifyLoss(lossCp: number): string | null {
   if (lossCp < 50) return null;
   if (lossCp < 100) return 'Inaccuracy';
@@ -626,6 +723,16 @@ export function formatEval(cp: number): string {
   return `${sign}${(Math.abs(cp) / 100).toFixed(2)}`;
 }
 
+/* Signed (`+1.23`/`-0.45`) or unsigned (`1.23`) pawn display. DecodeChess'
+ * game-insight verdicts print the magnitude without a sign: (1.46, loss 3.12). */
+export function formatEvalOpt(cp: number, signed: boolean): string {
+  if (Math.abs(cp) >= 90000) return formatEval(cp);
+  if (Math.round(cp) === 0) return '0.00';
+  const v = (Math.abs(cp) / 100).toFixed(2);
+  if (!signed) return v;
+  return cp >= 0 ? `+${v}` : `-${v}`;
+}
+
 export function advantageWord(cp: number): string {
   const a = Math.abs(cp);
   if (a >= 250) return 'decisive';
@@ -634,7 +741,7 @@ export function advantageWord(cp: number): string {
   return 'no';
 }
 
-function sideState(moverPovCp: number): string {
+export function sideState(moverPovCp: number): string {
   if (moverPovCp >= 250) return 'a decisive advantage';
   if (moverPovCp >= 120) return 'a clear advantage';
   if (moverPovCp >= 50) return 'a slight advantage';

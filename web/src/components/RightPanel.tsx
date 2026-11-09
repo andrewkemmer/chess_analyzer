@@ -2,10 +2,10 @@ import { useMemo } from 'react';
 import { Chess } from 'chess.js';
 import type { PanelView } from './Panels';
 import type {
-  AnalysisRow, ExplainResult, LineStep, Threat, Verdict,
+  AnalysisRow, ExplainResult, LineStep, Prospective, Threat, Verdict,
 } from '../lib/explain';
 import {
-  allFunctionality, formatEval, hangingPieces, opponentThreats, positionConcepts,
+  allFunctionality, capFirst, formatEval, hangingPieces, opponentThreats, positionConcepts,
 } from '../lib/explain';
 
 export interface OtherLine { san: string; uci: string; whiteCp: number; lossCp: number }
@@ -18,6 +18,7 @@ export interface DecodeData {
   verdict: Verdict | null;
   others: OtherLine[];
   engineName: string;
+  prosp: Prospective | null;
 }
 
 /* ---------------------------------------------------------- decode */
@@ -65,8 +66,38 @@ export function DecodeView({ data, loading }: { data: DecodeData | null; loading
       </div>
     );
   }
+  const pr = data.prosp;
   return (
     <div>
+      {pr && (
+        <div className="card">
+          <p><strong>{pr.prefix}{pr.san}</strong> is {pr.grade} ({pr.evalStr}{pr.lossStr != null ? `, loss ${pr.lossStr}` : ''}).</p>
+          {pr.replyKind === 'worthwhile' && <p>It makes it worthwhile for {pr.oppName} to play {pr.replySan}.</p>}
+          {pr.replyKind === 'respond' && <p>{pr.oppName} can respond with {pr.replySan}.</p>}
+          {pr.replyKind == null && pr.threatSan && <p>It ignores the threat of {pr.threatSan}.</p>}
+          {pr.showOpportunity && <p>It misses an opportunity to play {pr.prefix}{pr.bestSan} before {pr.oppName} can counter it.</p>}
+          {pr.showExtraLoss && <p>It loses a pawn and now {pr.extraMover} has {pr.extraState}.</p>}
+          {!!pr.cons.length && (
+            <div>
+              <p>Cons:</p>
+              <ul className="bullets">
+                {pr.cons.map((c, i) => <li key={i}>{capFirst(pr.san)} rules out playing {c}.</li>)}
+                {pr.showMore && <li className="muted">More...</li>}
+              </ul>
+            </div>
+          )}
+          {!!pr.pros.length && (
+            <div>
+              <p>Pros:</p>
+              <ul className="bullets">
+                {pr.pros.map((x, i) => <li key={i}>denies {pr.oppName} the ability to play {x}.</li>)}
+                {pr.showMore && <li className="muted">More...</li>}
+              </ul>
+            </div>
+          )}
+          <p className="muted">See the best continuation...</p>
+        </div>
+      )}
       <div className="card assess">{data.assessment}</div>
       <div className="card">
         <h3>Explaining the best line of {data.engineName}</h3>
@@ -145,7 +176,7 @@ function moveRows(rootFen: string, sans: string[]): Array<{ n: number; w?: numbe
   return out;
 }
 
-function movePrefix(rootFen: string, ply: number): string {
+export function movePrefix(rootFen: string, ply: number): string {
   const startTurn = rootFen.split(' ')[1] as 'w' | 'b';
   const startNo = parseInt(rootFen.split(' ')[5] || '1', 10);
   const off = startTurn === 'w' ? 0 : 1;

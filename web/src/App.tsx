@@ -7,16 +7,18 @@ import {
   SetupDialog, Sidebar, TakenPanel, Toolbar,
 } from './components/Panels';
 import type { PanelView, Tool } from './components/Panels';
-import type { AnalysisRow, Verdict } from './lib/explain';
+import type { AnalysisRow, Prospective, Verdict } from './lib/explain';
 import {
-  analyzeGame, bestLine, evaluateBoard, explainMove, moveVerdict, positionAssessment,
+  analyzeGame, bestLine, classifyLoss, evaluateBoard, explainMove, formatEvalOpt,
+  gradePhrase, moveConsequences, moveValue, moveVerdict, positionAssessment, sideState,
+  trim2,
 } from './lib/explain';
 import type { ExplainResult, LineStep } from './lib/explain';
 import { getEngine } from './lib/engine';
 import type { OtherLine } from './components/RightPanel';
 import {
   DecodeView, EngineView, GameView, GraphView, InfoView, MoveInfoView,
-  RightPanel, StatsView,
+  movePrefix, RightPanel, StatsView,
 } from './components/RightPanel';
 import type { DecodeData } from './components/RightPanel';
 import { exportPgn, fenAt, numberedSans, parseImport, sansOf, takenAt, STARTING_FEN } from './lib/game';
@@ -201,7 +203,9 @@ export default function App() {
 
   const runDecode = useCallback(async () => {
     if (busy.current) return;
-    const key = `${posFen}|d${depth}|p${plies}`;
+    const nextUciKey = fullUcis[effView] ?? '';
+    const rowsKey = rows && rows.length ? `r${rows.length}` : 'r0';
+    const key = `${posFen}|n${nextUciKey}|${rowsKey}|d${depth}|p${plies}`;
     const cached = decodeCache.current.get(key);
     if (cached) {
       setDecode(cached);
@@ -240,8 +244,80 @@ export default function App() {
           others.push({ san: applied.san, uci: pv.move, whiteCp: moverIsWhite ? pv.scoreCp : -pv.scoreCp, lossCp });
         } catch { /* skip */ }
       }
+      // prospective game-move insight (DecodeChess Insights style): grade the
+      // game continuation from HERE, not the move that led here.
+      let prosp: Prospective | null = null;
+      const nextUci = fullUcis[effView];
+      if (nextUci && !pos.isGameOver()) {
+        try {
+          const mover = pos.turn();
+          const moverName = mover === 'w' ? 'White' : 'Black';
+          const oppName = mover === 'w' ? 'Black' : 'White';
+          const prefix = movePrefix(rootFen, effView + 1);
+          const row = rows && rows[effView] && rows[effView].ply === effView + 1 ? rows[effView] : null;
+          const applier = new Chess(posFen);
+          let playedSan: string;
+          try {
+            playedSan = applier.move({ from: nextUci.slice(0, 2) as never, to: nextUci.slice(2, 4) as never, promotion: (nextUci[4] as never) }).san;
+          } catch {
+            playedSan = nextUci;
+          }
+          let label: string; let loss: number; let moverPov: number; let bestSan: string;
+          if (row) {
+            label = row.tag; loss = row.lossCp;
+            moverPov = mover === 'w' ? row.evalAfter : -row.evalAfter;
+            bestSan = row.bestSan;
+          } else {
+            const bestUci = best.move;
+            const bb = new Chess(posFen);
+            try {
+              bestSan = bb.move({ from: bestUci.slice(0, 2) as never, to: bestUci.slice(2, 4) as never, promotion: (bestUci[4] as never) }).san;
+            } catch {
+              bestSan = bestUci;
+            }
+            if (nextUci === bestUci) {
+              label = 'Best move'; loss = 0; moverPov = best.scoreCp;
+            } else {
+              const ps = await moveValue(engine, posFen, nextUci, depth);
+              loss = Math.max(0, best.scoreCp - ps);
+              if (Math.abs(best.scoreCp) >= 90000 || Math.abs(ps) >= 90000) loss = Math.min(loss, 500);
+              label = classifyLoss(loss) ?? 'Good move';
+              moverPov = ps;
+            }
+          }
+          const isBest = bestSan === playedSan;
+          const afterNext = new Chess(posFen);
+          try {
+            afterNext.move({ from: nextUci.slice(0, 2) as never, to: nextUci.slice(2, 4) as never, promotion: (nextUci[4] as never) });
+          } catch { /* keep root */ }
+          const ref = afterNext.isGameOver() ? [] : await bestLine(engine, afterNext.fen(), depth, 3);
+          let replySan = '';
+          let replyKind: Prospective['replyKind'] = null;
+          if (!isBest && ref.length && ref[0].san !== bestSan) {
+            replySan = ref[0].san;
+            const pc = new Chess(posFen).get(ref[0].uci.slice(0, 2) as never);
+            replyKind = pc?.type === 'q' ? 'worthwhile' : 'respond';
+          }
+          const consq = moveConsequences(posFen, nextUci);
+          const threatSan = consq.oppThreats.length ? consq.oppThreats[0].san : null;
+          const evalWhite = mover === 'w' ? moverPov : -moverPov;
+          prosp = {
+            prefix, san: playedSan, grade: gradePhrase(label),
+            evalStr: formatEvalOpt(Math.abs(evalWhite), false),
+            lossStr: isBest ? null : trim2(loss / 100),
+            replyKind, replySan, oppName,
+            threatSan: !isBest && !replyKind ? threatSan : null,
+            showOpportunity: !isBest && loss >= 75, bestSan,
+            extraMover: moverName, extraState: sideState(moverPov),
+            showExtraLoss: !isBest && loss >= 100 && loss < 200,
+            cons: consq.cons, pros: consq.prosDenied, showMore: consq.extra,
+          };
+        } catch {
+          prosp = null;
+        }
+      }
       const data: DecodeData = {
-        fen: posFen, assessment, line, expl, verdict, others, engineName: engine.info.name,
+        fen: posFen, assessment, line, expl, verdict, others, engineName: engine.info.name, prosp,
       };
       decodeCache.current.set(key, data);
       setDecode(data);
