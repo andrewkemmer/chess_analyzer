@@ -442,14 +442,18 @@ export default function App() {
   return (
     <div className="app">
       <Sidebar onTool={onTool} onDecode={() => setPanel('decode')} />
-      <main className="center">
-        <div className="tabrow">
-          <div className="tab active">♞ {tabName}</div>
-          <div className="tab-x" title="Close (single-board app)">✕</div>
-          <div className="tab-plus" title="Single-board app">+</div>
-        </div>
-        <Toolbar view={panel} setView={setPanel} engineName={engineName} />
-        <div className="boardrow">
+      <div className="main">
+        <header className="topbar">
+          <div className="tabrow">
+            <div className="tab active">♞ {tabName}</div>
+            <div className="tab-x" title="Close (single-board app)">✕</div>
+            <div className="tab-plus" title="Single-board app">+</div>
+          </div>
+          <Toolbar view={panel} setView={setPanel} engineName={engineName} />
+        </header>
+        <div className="layout">
+          <main className="center">
+            <div className="boardrow">
           <EvalBar cpWhite={evalCp} />
           <div className="boardwrap">
             <Board
@@ -512,6 +516,8 @@ export default function App() {
           <InfoView headers={headers} rootFen={rootFen} fen={posFen} moveCount={moves.length} pgn={pgn} />
         )}
       </RightPanel>
+        </div>
+      </div>
       {dialog?.kind === 'import' && (
         <Modal title="Import game" wide onClose={() => setDialog(null)}>
           <ImportDialog onLoad={importText} onExample={() => setDialog(null)} />

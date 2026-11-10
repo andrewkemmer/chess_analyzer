@@ -38,7 +38,7 @@ export const VIEWS: Array<{ id: PanelView; label: string; icon: string }> = [
   { id: 'decode', label: 'Decode', icon: '🔍' },
   { id: 'game', label: 'Moves', icon: '☰' },
   { id: 'graph', label: 'Graph', icon: '📈' },
-  { id: 'move', label: 'Position', icon: 'ℹ' },
+  { id: 'move', label: 'Move', icon: 'ℹ' },
   { id: 'engine', label: 'Engine', icon: '🐟' },
   { id: 'stats', label: 'Stats', icon: '📊' },
   { id: 'insights', label: 'Insights', icon: '💡' },

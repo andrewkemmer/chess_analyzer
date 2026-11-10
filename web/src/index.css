@@ -21,6 +21,9 @@ body {
 }
 
 .app { display: flex; height: 100vh; overflow: hidden; }
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.topbar { display: flex; align-items: center; gap: 12px; padding: 10px 14px 8px; border-bottom: 1px solid var(--line); background: var(--bg); }
+.layout { flex: 1; display: flex; min-height: 0; }
 
 /* ---------------- sidebar */
 .sidebar {
@@ -42,7 +45,7 @@ body {
 
 /* ---------------- center */
 .center { flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 10px 14px; gap: 8px; overflow-y: auto; }
-.tabrow { display: flex; align-items: center; gap: 6px; }
+.tabrow { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
 .tab {
   background: #fff; border: 1px solid var(--line); border-bottom: 3px solid var(--accent);
   border-radius: 8px 8px 0 0; padding: 6px 12px; font-weight: 600; font-size: 14px;
@@ -54,8 +57,8 @@ body {
   color: var(--muted); cursor: pointer; font-size: 14px;
 }
 
-.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.tb-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.toolbar { display: flex; align-items: center; gap: 8px; flex: 1; flex-wrap: wrap; justify-content: flex-end; }
+.tb-tabs { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .tb-btn {
   border: 1px solid var(--line); background: #fff; border-radius: 8px;
   padding: 6px 10px; cursor: pointer; font-size: 13px; color: var(--ink);
@@ -120,7 +123,7 @@ body {
 .taken-score { margin-top: 6px; font-size: 13px; font-weight: 700; text-align: center; }
 
 /* ---------------- right panel */
-.rightpanel { width: 400px; flex-shrink: 0; overflow-y: auto; padding: 10px 12px 20px 4px; }
+.rightpanel { width: 400px; flex-shrink: 0; overflow-y: auto; padding: 10px 12px 20px 10px; border-left: 1px solid var(--line); background: var(--bg); }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
 .card h3 { margin: 0 0 8px; font-size: 15px; }
 .card h4 { margin: 10px 0 4px; font-size: 13px; }
