@@ -9,7 +9,7 @@ import {
 import type { PanelView, Tool } from './components/Panels';
 import type { AnalysisRow, Prospective, Verdict } from './lib/explain';
 import {
-  analyzeGame, bestLine, classifyLoss, evaluateBoard, explainMove, formatEvalOpt,
+  analyzeGame, bestLine, bestUciFor, classifyLoss, evaluateBoard, explainMove, formatEvalOpt,
   gradePhrase, moveConsequences, moveValue, moveVerdict, positionAssessment, sideState,
   trim2,
 } from './lib/explain';
@@ -73,6 +73,9 @@ export default function App() {
   const [progress, setProgress] = useState('');
   const [dialog, setDialog] = useState<null | { kind: 'import' | 'setup' | 'help' | 'examples' | 'history' }>(null);
   const [hist, setHist] = useState<HistEntry[]>(loadHist);
+  // green best-move arrow pinned by the Insights review (position before the
+  // graded move + the engine's best move there); cleared by any other nav
+  const [insightArrow, setInsightArrow] = useState<{ fen: string; move: SimpleMove } | null>(null);
 
   const decodeCache = useRef(new Map<string, DecodeData>());
   const analysisCache = useRef(new Map<string, AnalysisRow[]>());
@@ -130,14 +133,16 @@ export default function App() {
   const bestMove: SimpleMove | null =
     decode && decode.fen === posFen && decode.line.length
       ? { from: decode.line[0].uci.slice(0, 2), to: decode.line[0].uci.slice(2, 4) }
-      : null;
+      : insightArrow && insightArrow.fen === posFen ? insightArrow.move : null;
 
   const gotoPly = useCallback((ply: number) => {
     setView(Math.max(0, Math.min(moves.length, ply)));
     setInBranch(false);
+    setInsightArrow(null);
   }, [moves.length]);
 
   const gotoBranch = useCallback((ply: number) => {
+    setInsightArrow(null);
     if (!branch) return;
     const end = branch.base + branch.line.length;
     const p = Math.max(branch.base, Math.min(end, ply));
@@ -154,6 +159,19 @@ export default function App() {
     if (branch && ply > branch.base) gotoBranch(ply);
     else gotoPly(ply);
   }, [branch, gotoBranch, gotoPly]);
+
+  // Insights review: land on the position BEFORE the graded move (like a
+  // DecodeChess insight) and pin the green best-move arrow there — the move
+  // that should have been played instead. No engine call: the SAN comes
+  // from the analysis row and is resolved to a legal UCI on the board.
+  const gotoInsight = useCallback((ply: number, bestSan: string | null) => {
+    const before = Math.max(0, ply - 1);
+    setInBranch(false);
+    setView(Math.min(before, moves.length));
+    const fen = fenAt(rootFen, moves, Math.min(before, moves.length));
+    const u = bestSan ? bestUciFor(fen, bestSan) : null;
+    setInsightArrow(u ? { fen, move: { from: u.slice(0, 2), to: u.slice(2, 4) } } : null);
+  }, [rootFen, moves]);
 
   const dropBranch = useCallback(() => {
     setBranch(null);
@@ -486,7 +504,7 @@ export default function App() {
           <StatsView rows={rows} analyzing={analyzing} progress={progress} onAnalyze={runAnalyze} onGoto={gotoEff} hasMoves={fullUcis.length > 0} />
         )}
         {panel === 'insights' && (
-          <InsightsView rows={rows} rootFen={rootFen} moves={moves} view={effView} onGoto={gotoEff} onAnalyze={runAnalyze} analyzing={analyzing} progress={progress} hasMoves={fullUcis.length > 0} />
+          <InsightsView rows={rows} rootFen={rootFen} moves={moves} view={effView} onInsight={gotoInsight} onAnalyze={runAnalyze} analyzing={analyzing} progress={progress} hasMoves={fullUcis.length > 0} />
         )}
         {panel === 'info' && (
           <InfoView headers={headers} rootFen={rootFen} fen={posFen} moveCount={moves.length} pgn={pgn} />
