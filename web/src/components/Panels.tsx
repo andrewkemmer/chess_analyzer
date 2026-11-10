@@ -28,7 +28,7 @@ export function Sidebar({ onTool, onDecode }: { onTool: (t: Tool) => void; onDec
 
 /* ---------------------------------------------------------- toolbar */
 
-export type PanelView = 'decode' | 'game' | 'graph' | 'move' | 'engine' | 'stats' | 'info';
+export type PanelView = 'decode' | 'game' | 'graph' | 'move' | 'engine' | 'stats' | 'insights' | 'info';
 
 export const VIEWS: Array<{ id: PanelView; label: string; icon: string }> = [
   { id: 'decode', label: 'Decode', icon: '🔍' },
@@ -37,6 +37,7 @@ export const VIEWS: Array<{ id: PanelView; label: string; icon: string }> = [
   { id: 'move', label: 'Position', icon: 'ℹ' },
   { id: 'engine', label: 'Engine', icon: '🐟' },
   { id: 'stats', label: 'Stats', icon: '📊' },
+  { id: 'insights', label: 'Insights', icon: '💡' },
   { id: 'info', label: 'Info', icon: 'ⓘ' },
 ];
 

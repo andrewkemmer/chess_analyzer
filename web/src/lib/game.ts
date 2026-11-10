@@ -123,6 +123,15 @@ export function numberedSans(fromFen: string, ucis: string[]): string[] {
   return out;
 }
 
+/** Move-number prefix for a 1-based ply, e.g. `17... ` or `18. `. */
+export function movePrefix(rootFen: string, ply: number): string {
+  const startTurn = rootFen.split(' ')[1] as 'w' | 'b';
+  const startNo = parseInt(rootFen.split(' ')[5] || '1', 10);
+  const off = startTurn === 'w' ? 0 : 1;
+  const n = startNo + Math.floor((ply - 1 + off) / 2);
+  return (ply - 1 + off) % 2 === 0 ? `${n}. ` : `${n}... `;
+}
+
 /** Build a PGN string for export/download, with an optional sideline variation. */
 export function exportPgn(rootFen: string, moves: string[], headers: Record<string, string>, branch?: Branch | null): string {
   const c = new Chess(rootFen);

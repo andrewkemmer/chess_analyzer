@@ -17,11 +17,11 @@ import type { ExplainResult, LineStep } from './lib/explain';
 import { getEngine } from './lib/engine';
 import type { OtherLine } from './components/RightPanel';
 import {
-  DecodeView, EngineView, GameView, GraphView, InfoView, MoveInfoView,
-  movePrefix, RightPanel, StatsView,
+  DecodeView, EngineView, GameView, GraphView, InfoView, InsightsView, MoveInfoView,
+  RightPanel, StatsView,
 } from './components/RightPanel';
 import type { DecodeData } from './components/RightPanel';
-import { exportPgn, fenAt, numberedSans, parseImport, sansOf, takenAt, STARTING_FEN } from './lib/game';
+import { exportPgn, fenAt, movePrefix, numberedSans, parseImport, sansOf, takenAt, STARTING_FEN } from './lib/game';
 
 const RUY = `[White "Ruy Lopez"]
 [Black "Example"]
@@ -484,6 +484,9 @@ export default function App() {
         )}
         {panel === 'stats' && (
           <StatsView rows={rows} analyzing={analyzing} progress={progress} onAnalyze={runAnalyze} onGoto={gotoEff} hasMoves={fullUcis.length > 0} />
+        )}
+        {panel === 'insights' && (
+          <InsightsView rows={rows} rootFen={rootFen} moves={moves} view={effView} onGoto={gotoEff} onAnalyze={runAnalyze} analyzing={analyzing} progress={progress} hasMoves={fullUcis.length > 0} />
         )}
         {panel === 'info' && (
           <InfoView headers={headers} rootFen={rootFen} fen={posFen} moveCount={moves.length} pgn={pgn} />

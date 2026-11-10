@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Chess } from 'chess.js';
 import type { PanelView } from './Panels';
 import type {
@@ -6,7 +6,9 @@ import type {
 } from '../lib/explain';
 import {
   allFunctionality, capFirst, formatEval, hangingPieces, opponentThreats, positionConcepts,
+  shortInsight,
 } from '../lib/explain';
+import { movePrefix } from '../lib/game';
 
 export interface OtherLine { san: string; uci: string; whiteCp: number; lossCp: number }
 
@@ -174,14 +176,6 @@ function moveRows(rootFen: string, sans: string[]): Array<{ n: number; w?: numbe
     else out.push({ n, b: i });
   });
   return out;
-}
-
-export function movePrefix(rootFen: string, ply: number): string {
-  const startTurn = rootFen.split(' ')[1] as 'w' | 'b';
-  const startNo = parseInt(rootFen.split(' ')[5] || '1', 10);
-  const off = startTurn === 'w' ? 0 : 1;
-  const n = startNo + Math.floor((ply - 1 + off) / 2);
-  return (ply - 1 + off) % 2 === 0 ? `${n}. ` : `${n}... `;
 }
 
 export function GameView({ rootFen, sans, view, onGoto, result, grades, analysis, fallbackEval, branchBase, branchTokens, branchActive, branchPos, onBranchGoto, onDropBranch }: {
@@ -475,6 +469,72 @@ export function StatsView({ rows, analyzing, progress, onAnalyze, onGoto, hasMov
             </button>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------- insights (decode game) */
+
+const KEY_TAGS = new Set(['Inaccuracy', 'Mistake', 'Blunder']);
+
+export function InsightsView({ rows, rootFen, moves, view, onGoto, onAnalyze, analyzing, progress, hasMoves }: {
+  rows: AnalysisRow[] | null; rootFen: string; moves: string[]; view: number;
+  onGoto: (ply: number) => void;
+  onAnalyze: () => void; analyzing: boolean; progress: string; hasMoves: boolean;
+}) {
+  const [filter, setFilter] = useState<'key' | 'all' | 'White' | 'Black'>('key');
+  const body = useMemo(
+    () => (rows ?? []).map((r) => ({ row: r, text: shortInsight(r, rootFen, moves) })),
+    [rows, rootFen, moves],
+  );
+  if (!rows) {
+    return (
+      <div className="card">
+        <h3>Game insights</h3>
+        <p className="muted">One short coach-level explanation per move — DecodeChess' "Decode game". Grade every move first, then review each insight and jump to it on the board.</p>
+        <button className="btn primary" onClick={onAnalyze} disabled={analyzing || !hasMoves}>
+          {analyzing ? `Analyzing… ${progress}` : hasMoves ? 'Analyze all moves' : 'Load a game with moves first'}
+        </button>
+      </div>
+    );
+  }
+  const keys = body.filter((b) => KEY_TAGS.has(b.row.tag));
+  const list = body.filter((b) =>
+    filter === 'all' ? true : filter === 'key' ? KEY_TAGS.has(b.row.tag) : b.row.side === filter);
+  // step through the key moments like DecodeChess' "Next insight"
+  const ahead = keys.filter((b) => b.row.ply > view);
+  const behind = keys.filter((b) => b.row.ply <= view);
+  const step = (dir: 1 | -1) => {
+    const t = dir === 1 ? ahead[0] : behind[behind.length - 1];
+    if (t) onGoto(t.row.ply);
+  };
+  return (
+    <div className="card">
+      <h3>Game insights <span className="muted">({keys.length} key moment{keys.length === 1 ? '' : 's'})</span></h3>
+      <div className="dlg-row">
+        <button className="btn sm" onClick={() => step(-1)} disabled={!behind.length} title="Previous key moment">◀ Prev</button>
+        <button className="btn sm" onClick={() => step(1)} disabled={!ahead.length} title="Next insight">Next ▶</button>
+        <span style={{ flex: 1 }} />
+        {(['key', 'all', 'White', 'Black'] as const).map((f) => (
+          <button key={f} className={'btn sm' + (filter === f ? ' primary' : '')} onClick={() => setFilter(f)}>
+            {f === 'key' ? 'Key' : f}
+          </button>
+        ))}
+      </div>
+      <div className="stattable">
+        {list.length ? list.map(({ row: r, text }) => {
+          const sym = TAG_SYMBOL[r.tag] ?? '';
+          return (
+            <button key={r.ply} className={'statrow' + (view === r.ply ? ' cur' : '')} onClick={() => onGoto(r.ply)} title={`Go to move ${r.ply} — press Decode for the full explanation`}>
+              <span className="stat-ply">{r.ply}.</span>
+              <span className={'tag sm ' + (TAG_CLASS[r.tag] ?? '')}>{sym ? `${sym} ` : ''}{r.tag}</span>
+              <span style={{ gridColumn: '3 / span 2' }}>{text}</span>
+            </button>
+          );
+        }) : (
+          <p className="muted">No {filter === 'key' ? 'inaccuracies, mistakes or blunders' : filter + ' moves'} — a clean game!</p>
+        )}
       </div>
     </div>
   );

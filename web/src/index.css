@@ -179,6 +179,7 @@ body {
 .stattable { display: flex; flex-direction: column; gap: 2px; max-height: 420px; overflow-y: auto; }
 .statrow { display: grid; grid-template-columns: 34px 64px 92px 1fr; gap: 4px; align-items: center; border: none; background: none; padding: 4px 2px; cursor: pointer; font-size: 13px; text-align: left; border-radius: 6px; }
 .statrow:hover { background: #eef3f7; }
+.statrow.cur { background: #e3edf5; }
 .stat-ply { color: var(--muted); }
 .stat-san { font-weight: 700; }
 

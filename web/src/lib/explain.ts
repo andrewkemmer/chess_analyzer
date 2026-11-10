@@ -5,6 +5,7 @@
 import { Chess, SQUARES } from 'chess.js';
 import type { Move } from 'chess.js';
 import type { PvInfo } from './engine';
+import { fenAt, movePrefix } from './game';
 
 export const MATE_CP = 100000;
 
@@ -605,6 +606,53 @@ export function suggestPlans(chess: Chess, color: 'w' | 'b'): string[] {
   return plans.slice(0, 4).length ? plans.slice(0, 4) : ['Improve your worst-placed piece and restrict enemy counterplay.'];
 }
 
+/* ---------------- Decode Game: short insight per move ---------------- */
+
+/** Why the played move falls short: mate / material / attack / continuation. */
+export function missReason(fen: string, bestUci: string | null): string {
+  if (!bestUci) return 'It misses the strongest continuation';
+  const bbest = new Chess(fen);
+  try {
+    bbest.move({ from: bestUci.slice(0, 2) as never, to: bestUci.slice(2, 4) as never, promotion: (bestUci[4] as never) });
+  } catch {
+    return 'It misses the strongest continuation';
+  }
+  if (bbest.isCheckmate()) return 'It misses mate';
+  const bm = new Chess(fen).moves({ verbose: true })
+    .find((m) => m.from + m.to + (m.promotion ?? '') === bestUci);
+  if (bm && (bm.flags.includes('c') || bm.flags.includes('e'))) return 'It misses winning material';
+  if (bbest.isCheck()) return 'It misses the strongest attack';
+  return 'It misses the strongest continuation';
+}
+
+/** UCI of the move matching `bestSan` in the position, if it is still legal. */
+export function bestUciFor(fen: string, bestSan: string): string | null {
+  try {
+    const m = new Chess(fen).moves({ verbose: true }).find((x) => x.san === bestSan);
+    return m ? mvKey(m) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** One or two coach-level sentences about a graded game move (no engine
+ *  calls — derived from the analysis row plus a sync board lookup). This is
+ *  the Decode Game style short explanation for each move of the game. */
+export function shortInsight(row: AnalysisRow, rootFen: string, ucis: string[]): string {
+  const moverPov = row.side === 'White' ? row.evalAfter : -row.evalAfter;
+  const state = sideState(moverPov);
+  const pre = movePrefix(rootFen, row.ply);
+  if (row.tag === 'Best') return `${pre}${row.san} is the best move — ${row.side} keeps ${state}.`;
+  if (row.tag === 'Good') {
+    return `${pre}${row.san} is a good move (only ${trim2(row.lossCp / 100)} off best). ${row.side} keeps ${state}.`;
+  }
+  const art = row.tag === 'Inaccuracy' ? 'an' : 'a';
+  const before = fenAt(rootFen, ucis, row.ply - 1);
+  const reason = missReason(before, bestUciFor(before, row.bestSan));
+  return `${pre}${row.san} is ${art} ${row.tag.toLowerCase()} (loss: ${trim2(row.lossCp / 100)}). ` +
+    `${reason} and now ${row.side} has ${state}. The best move was ${row.bestSan}.`;
+}
+
 /* ---------------- format-B game insight (prospective) ---------------- */
 
 const mvKey = (m: { from: string; to: string; promotion?: string }): string =>
@@ -870,17 +918,7 @@ export async function moveVerdict(
     sentence = `${prefix}${san} is a good move (only ${trim2(loss / 100)} off best). ${moverName} keeps ${sideState(moverPov)}.`;
   } else {
     const art = label === 'Inaccuracy' ? 'an' : 'a';
-    const bbest = new Chess(fen);
-    let reason = 'It misses the strongest continuation';
-    try {
-      bbest.move({ from: best.move.slice(0, 2) as never, to: best.move.slice(2, 4) as never, promotion: (best.move[4] as never) });
-      if (bbest.isCheckmate()) reason = 'It misses mate';
-      else {
-        const bm = new Chess(fen).moves({ verbose: true }).find((m) => m.from + m.to + (m.promotion ?? '') === best.move);
-        if (bm && (bm.flags.includes('c') || bm.flags.includes('e'))) reason = 'It misses winning material';
-        else if (bbest.isCheck()) reason = 'It misses the strongest attack';
-      }
-    } catch { /* keep default */ }
+    const reason = missReason(fen, best.move);
     sentence = `${prefix}${san} is ${art} ${label.toLowerCase()} (loss: ${trim2(loss / 100)}). ${reason} and now ${moverName} has ${sideState(moverPov)}.`;
   }
   const ref = after.isGameOver() ? [] : await bestLine(engine, after.fen(), depth, plies);
