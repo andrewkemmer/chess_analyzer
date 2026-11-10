@@ -194,6 +194,18 @@ body {
 .modal-x { border: none; background: none; font-size: 16px; cursor: pointer; color: var(--muted); }
 .dlg-text { width: 100%; font-family: monospace; font-size: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 8px; resize: vertical; }
 .dlg-row { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+.dlg-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+.dlg-tab { flex: 1; border: 1px solid var(--line); background: #f4f7fa; border-radius: 8px; padding: 7px 4px; font-size: 13px; cursor: pointer; }
+.dlg-tab.active { background: var(--navy); color: #fff; border-color: var(--navy); font-weight: 700; }
+.dlg-input { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+.dlg-select { border: 1px solid var(--line); border-radius: 8px; padding: 8px; font-size: 13px; background: #fff; }
+.game-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; max-height: 320px; overflow-y: auto; }
+.game-row { display: flex; gap: 8px; align-items: center; text-align: left; border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 7px 10px; cursor: pointer; font-size: 13px; }
+.game-row:hover { background: #eef3f7; }
+.game-main { flex: 1; min-width: 0; }
+.game-names { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.game-sub { color: var(--muted); font-size: 12px; }
+.game-res { font-weight: 700; white-space: nowrap; }
 .btn { border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 8px 14px; cursor: pointer; font-size: 14px; }
 .btn.primary { background: var(--navy); color: #fff; border-color: var(--navy); font-weight: 700; }
 .btn.sm { padding: 4px 10px; font-size: 12px; }

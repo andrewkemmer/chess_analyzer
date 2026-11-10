@@ -513,7 +513,7 @@ export default function App() {
         )}
       </RightPanel>
       {dialog?.kind === 'import' && (
-        <Modal title="Import game" onClose={() => setDialog(null)}>
+        <Modal title="Import game" wide onClose={() => setDialog(null)}>
           <ImportDialog onLoad={importText} onExample={() => setDialog(null)} />
         </Modal>
       )}

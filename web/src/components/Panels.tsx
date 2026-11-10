@@ -1,6 +1,10 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { Taken } from '../lib/game';
 import { formatEval } from '../lib/explain';
+import type { OnlineGame } from '../lib/onlineImport';
+import {
+  fetchChessComGames, fetchLichessGameByUrl, fetchLichessGames, fetchPgnFromUrl,
+} from '../lib/onlineImport';
 
 /* ---------------------------------------------------------- sidebar */
 
@@ -16,7 +20,7 @@ export function Sidebar({ onTool, onDecode }: { onTool: (t: Tool) => void; onDec
     <aside className="sidebar">
       <div className="sb-logo">{'{♞}'}</div>
       {btn('new', '⚔', 'New game')}
-      {btn('import', '⤓', 'Import a PGN game or FEN')}
+      {btn('import', '⤓', 'Import games from Chess.com, Lichess, PGN or FEN')}
       {btn('setup', '♞', 'Set up a position (FEN)')}
       {btn('examples', '▤', 'Example games')}
       {btn('history', '🕘', 'History')}
@@ -145,9 +149,56 @@ const EXAMPLE_PGN = `[White "Example"]
 
 1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 6. Re1 b5 7. Bb3 d6 *`;
 
+type ImportTab = 'pgn' | 'chesscom' | 'lichess';
+
 export function ImportDialog({ onLoad, onExample }: { onLoad: (text: string) => string | null; onExample: () => void }) {
-  const [text, setText] = useState('');
+  const [tab, setTab] = useState<ImportTab>('pgn');
   const [err, setErr] = useState<string | null>(null);
+  const load = (text: string): void => {
+    const e = onLoad(text);
+    setErr(e);
+    if (!e) onExample(); // close on success
+  };
+  const tabs: Array<{ id: ImportTab; label: string }> = [
+    { id: 'pgn', label: '📋 PGN' },
+    { id: 'chesscom', label: '♟ Chess.com' },
+    { id: 'lichess', label: '♞ Lichess' },
+  ];
+  return (
+    <div>
+      <div className="dlg-tabs">
+        {tabs.map((t) => (
+          <button key={t.id} className={'dlg-tab' + (tab === t.id ? ' active' : '')} onClick={() => { setTab(t.id); setErr(null); }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === 'pgn' && <PgnTab onLoad={load} />}
+      {tab === 'chesscom' && <OnlineTab source="chesscom" onLoad={load} />}
+      {tab === 'lichess' && <OnlineTab source="lichess" onLoad={load} />}
+      {err && <div className="err">{err}</div>}
+    </div>
+  );
+}
+
+function PgnTab({ onLoad }: { onLoad: (text: string) => void }) {
+  const [text, setText] = useState('');
+  const [url, setUrl] = useState('');
+  const [showUrl, setShowUrl] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const pullUrl = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      setText(await fetchPgnFromUrl(url));
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Download failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <div>
       <p className="muted">Paste a PGN game or FEN position to decode it move by move.</p>
@@ -158,21 +209,122 @@ export function ImportDialog({ onLoad, onExample }: { onLoad: (text: string) => 
         onChange={(e) => setText(e.target.value)}
         placeholder={'1. e4 e5 2. Nf3 ...  — or a FEN string'}
       />
-      {err && <div className="err">{err}</div>}
+      {showUrl && (
+        <div className="dlg-row">
+          <input
+            className="dlg-input" value={url} onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://…/game.pgn"
+          />
+          <button className="btn sm" disabled={busy} onClick={pullUrl}>{busy ? '…' : 'Fetch'}</button>
+        </div>
+      )}
+      {msg && <div className="err">{msg}</div>}
       <div className="dlg-row">
-        <button className="btn" onClick={() => { setText(EXAMPLE_PGN); setErr(null); }}>Example</button>
-        <span style={{ flex: 1 }} />
-        <button
-          className="btn primary"
-          onClick={() => {
-            const e = onLoad(text);
-            setErr(e);
-            if (!e) onExample(); // close on success
+        <button className="btn sm" onClick={() => { setText(EXAMPLE_PGN); setMsg(null); }}>Example</button>
+        <button className="btn sm" onClick={() => fileRef.current?.click()}>📁 File…</button>
+        <input
+          ref={fileRef} type="file" accept=".pgn,.txt,.fen,.pgn.txt" style={{ display: 'none' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (!f) return;
+            f.text().then((t) => { setText(t); setMsg(null); }).catch(() => setMsg('Could not read that file.'));
+            e.target.value = '';
           }}
-        >
-          Load game
-        </button>
+        />
+        <button className="btn sm" onClick={() => setShowUrl((s) => !s)}>🔗 Link…</button>
+        <span style={{ flex: 1 }} />
+        <button className="btn primary" onClick={() => onLoad(text)}>Load game</button>
       </div>
+    </div>
+  );
+}
+
+function OnlineTab({ source, onLoad }: { source: 'chesscom' | 'lichess'; onLoad: (text: string) => void }) {
+  const [user, setUser] = useState('');
+  const [max, setMax] = useState(20);
+  const [games, setGames] = useState<OnlineGame[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [link, setLink] = useState('');
+  const [linkBusy, setLinkBusy] = useState(false);
+  const site = source === 'chesscom' ? 'Chess.com' : 'Lichess';
+  const fetchGames = async () => {
+    setBusy(true);
+    setMsg(null);
+    setGames(null);
+    try {
+      const list = source === 'chesscom'
+        ? await fetchChessComGames(user, max)
+        : await fetchLichessGames(user, max);
+      setGames(list);
+      if (!list.length) setMsg(`No games found for "${user.trim()}" — recent games show up here.`);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Fetch failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const loadLink = async () => {
+    setLinkBusy(true);
+    setMsg(null);
+    try {
+      const g = await fetchLichessGameByUrl(link);
+      onLoad(g.pgn);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Could not load that link.');
+    } finally {
+      setLinkBusy(false);
+    }
+  };
+  return (
+    <div>
+      <p className="muted">
+        {source === 'chesscom'
+          ? 'Enter your Chess.com username to fetch your newest finished games — no password needed.'
+          : 'Enter your Lichess username to fetch your newest games — no password needed.'}
+      </p>
+      <div className="dlg-row" style={{ marginTop: 0 }}>
+        <input
+          className="dlg-input" value={user} onChange={(e) => setUser(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') fetchGames(); }}
+          placeholder={`${site} username`}
+        />
+        <select className="dlg-select" value={max} onChange={(e) => setMax(Number(e.target.value))} title="How many games to fetch">
+          <option value={10}>10</option>
+          <option value={20}>20</option>
+          <option value={50}>50</option>
+        </select>
+        <button className="btn primary" disabled={busy} onClick={fetchGames}>{busy ? '…' : 'Fetch'}</button>
+      </div>
+      {msg && <div className="err">{msg}</div>}
+      {games && games.length > 0 && (
+        <div className="game-list">
+          {games.map((g) => (
+            <button key={g.id} className="game-row" onClick={() => onLoad(g.pgn)} title={`Load ${g.white} vs ${g.black}`}>
+              <span className="game-main">
+                <span className="game-names">{g.white} vs {g.black}</span>
+                <br />
+                <span className="game-sub">{g.date}{g.timeControl ? ` · ${g.timeControl}` : ''}</span>
+              </span>
+              <span className="game-res">{g.result}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {source === 'chesscom' ? (
+        <p className="muted" style={{ marginTop: 10 }}>
+          One single game? Open it on Chess.com → Share → PGN, then paste it in the PGN tab.
+        </p>
+      ) : (
+        <div className="dlg-row">
+          <input
+            className="dlg-input" value={link} onChange={(e) => setLink(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') loadLink(); }}
+            placeholder="…or paste a Lichess game link"
+          />
+          <button className="btn sm" disabled={linkBusy} onClick={loadLink}>{linkBusy ? '…' : 'Load'}</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -202,7 +354,7 @@ export function SetupDialog({ fen, onApply }: { fen: string; onApply: (fen: stri
 }
 
 export const HELP_TEXT = `How to use
-• Import a PGN (⤓) or pick an Example, then step through the game with ◀ ▶.
+• Import (⤓): fetch games straight from your Chess.com or Lichess username, paste a Lichess game link, or paste/drop a PGN — or pick an Example. Then step through the game with ◀ ▶.
 • Press Decode under the board for the rich explanation: assessment, best line, why it's good, your-move verdict, major threats, and how to find it.
 • Make moves by dragging or clicking on the board; the engine replies with analysis. Everything runs locally in your browser (Stockfish WASM).`;
 
