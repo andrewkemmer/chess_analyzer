@@ -503,8 +503,8 @@ export function InsightsView({ rows, rootFen, moves, view, onInsight, onAnalyze,
   const list = body.filter((b) =>
     filter === 'all' ? true : filter === 'key' ? KEY_TAGS.has(b.row.tag) : b.row.side === filter);
   // step through the key moments like DecodeChess' "Next insight"
-  const ahead = keys.filter((b) => b.row.ply - 1 > view);
-  const behind = keys.filter((b) => b.row.ply - 1 <= view);
+  const ahead = keys.filter((b) => b.row.ply > view);
+  const behind = keys.filter((b) => b.row.ply <= view);
   const step = (dir: 1 | -1) => {
     const t = dir === 1 ? ahead[0] : behind[behind.length - 1];
     if (t) onInsight(t.row.ply, t.row.bestSan);
@@ -526,7 +526,7 @@ export function InsightsView({ rows, rootFen, moves, view, onInsight, onAnalyze,
         {list.length ? list.map(({ row: r, text }) => {
           const sym = TAG_SYMBOL[r.tag] ?? '';
           return (
-            <button key={r.ply} className={'statrow' + (view === r.ply - 1 ? ' cur' : '')} onClick={() => onInsight(r.ply, r.bestSan)} title={`Show the position before this move with the best move arrowed — press Decode for the full explanation`}>
+            <button key={r.ply} className={'statrow' + (view === r.ply ? ' cur' : '')} onClick={() => onInsight(r.ply, r.bestSan)} title={`Show this move (yellow) with the best move arrowed in green — press Decode for the full explanation`}>
               <span className="stat-ply">{r.ply}.</span>
               <span className={'tag sm ' + (TAG_CLASS[r.tag] ?? '')}>{sym ? `${sym} ` : ''}{r.tag}</span>
               <span style={{ gridColumn: '3 / span 2' }}>{text}</span>

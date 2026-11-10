@@ -160,17 +160,19 @@ export default function App() {
     else gotoPly(ply);
   }, [branch, gotoBranch, gotoPly]);
 
-  // Insights review: land on the position BEFORE the graded move (like a
-  // DecodeChess insight) and pin the green best-move arrow there — the move
-  // that should have been played instead. No engine call: the SAN comes
-  // from the analysis row and is resolved to a legal UCI on the board.
+  // Insights review, DecodeChess style: land on the position AFTER the graded
+  // move so its yellow last-move highlight is the move itself, and pin the
+  // green best-move arrow for the optimal move instead. The UCI is resolved
+  // from the row's best SAN against the BEFORE position (no engine call) and
+  // drawn on the after-position board.
   const gotoInsight = useCallback((ply: number, bestSan: string | null) => {
-    const before = Math.max(0, ply - 1);
+    const at = Math.max(0, Math.min(ply, moves.length));
     setInBranch(false);
-    setView(Math.min(before, moves.length));
-    const fen = fenAt(rootFen, moves, Math.min(before, moves.length));
-    const u = bestSan ? bestUciFor(fen, bestSan) : null;
-    setInsightArrow(u ? { fen, move: { from: u.slice(0, 2), to: u.slice(2, 4) } } : null);
+    setView(at);
+    const beforeFen = fenAt(rootFen, moves, Math.max(0, at - 1));
+    const u = bestSan ? bestUciFor(beforeFen, bestSan) : null;
+    const afterFen = fenAt(rootFen, moves, at);
+    setInsightArrow(u ? { fen: afterFen, move: { from: u.slice(0, 2), to: u.slice(2, 4) } } : null);
   }, [rootFen, moves]);
 
   const dropBranch = useCallback(() => {
