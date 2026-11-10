@@ -32,24 +32,40 @@ export function Sidebar({ onTool, onDecode }: { onTool: (t: Tool) => void; onDec
 
 /* ---------------------------------------------------------- toolbar */
 
-export type PanelView = 'decode' | 'game' | 'graph' | 'move' | 'engine' | 'stats' | 'insights' | 'info';
+export type ContextView = 'game' | 'graph' | 'move' | 'engine' | 'stats' | 'info';
+export type PanelView = ContextView;
+export type DockToggle = 'decode' | 'insights';
 
-export const VIEWS: Array<{ id: PanelView; label: string; icon: string }> = [
-  { id: 'decode', label: 'Decode', icon: '🔍' },
+export const CONTEXT_VIEWS: Array<{ id: ContextView; label: string; icon: string }> = [
   { id: 'game', label: 'Moves', icon: '☰' },
   { id: 'graph', label: 'Graph', icon: '📈' },
   { id: 'move', label: 'Move', icon: 'ℹ' },
   { id: 'engine', label: 'Engine', icon: '🐟' },
   { id: 'stats', label: 'Stats', icon: '📊' },
-  { id: 'insights', label: 'Insights', icon: '💡' },
   { id: 'info', label: 'Info', icon: 'ⓘ' },
 ];
 
-export function Toolbar({ view, setView, engineName }: { view: PanelView; setView: (v: PanelView) => void; engineName: string }) {
+export function Toolbar({ view, setView, decodeActive, insightsActive, onToggle, engineName }: {
+  view: ContextView; setView: (v: ContextView) => void;
+  decodeActive: boolean; insightsActive: boolean; onToggle: (id: DockToggle) => void;
+  engineName: string;
+}) {
+  const toggleBtn = (id: DockToggle, active: boolean, icon: string, label: string) => (
+    <button key={id} className={'tb-btn' + (active ? ' active' : '')} onClick={() => onToggle(id)} title={label}>
+      <span>{icon}</span> {label}
+    </button>
+  );
   return (
     <div className="toolbar">
       <div className="tb-tabs">
-        {VIEWS.map((v) => (
+        {toggleBtn('decode', decodeActive, '🔍', 'Decode')}
+        {CONTEXT_VIEWS.slice(0, 4).map((v) => (
+          <button key={v.id} className={'tb-btn' + (view === v.id ? ' active' : '')} onClick={() => setView(v.id)} title={v.label}>
+            <span>{v.icon}</span> {v.label}
+          </button>
+        ))}
+        {toggleBtn('insights', insightsActive, '💡', 'Insights')}
+        {CONTEXT_VIEWS.slice(4).map((v) => (
           <button key={v.id} className={'tb-btn' + (view === v.id ? ' active' : '')} onClick={() => setView(v.id)} title={v.label}>
             <span>{v.icon}</span> {v.label}
           </button>

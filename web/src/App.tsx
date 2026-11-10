@@ -6,7 +6,7 @@ import {
   EvalBar, HELP_TEXT, HistoryDialog, ImportDialog, Modal, NavButtons,
   SetupDialog, Sidebar, TakenPanel, Toolbar,
 } from './components/Panels';
-import type { PanelView, Tool } from './components/Panels';
+import type { ContextView, DockToggle, Tool } from './components/Panels';
 import type { AnalysisRow, Prospective, Verdict } from './lib/explain';
 import {
   analyzeGame, bestLine, bestUciFor, classifyLoss, evaluateBoard, explainMove, formatEvalOpt,
@@ -56,7 +56,9 @@ export default function App() {
   const [view, setView] = useState(0);
   const [headers, setHeaders] = useState<Record<string, string>>({});
   const [orientation, setOrientation] = useState<'w' | 'b'>('w');
-  const [panel, setPanel] = useState<PanelView>('decode');
+  const [panel, setPanel] = useState<ContextView>('game');
+  const [decodeOpen, setDecodeOpen] = useState(false);
+  const [insightsOpen, setInsightsOpen] = useState(false);
   const [depth, setDepth] = useState(16);
   const [plies, setPlies] = useState(6);
   const [engineName, setEngineName] = useState('Stockfish');
@@ -203,7 +205,6 @@ export default function App() {
     }
     // the line changed: full-game grades no longer apply to these plies
     setRows(null);
-    setPanel('decode');
   }, [inBranch, branch, bview, view, moves]);
 
   const loadGame = useCallback((root: string, mv: string[], hdrs: Record<string, string>) => {
@@ -212,6 +213,9 @@ export default function App() {
     setView(mv.length);
     setHeaders(hdrs);
     setDecode(null);
+    setDecodeErr(null);
+    setDecodeOpen(false);
+    setInsightsOpen(false);
     setRows(null);
     setBranch(null);
     setInBranch(false);
@@ -230,13 +234,13 @@ export default function App() {
     if (cached) {
       setDecode(cached);
       setDecodeErr(null);
-      setPanel('decode');
+      setDecodeOpen(true);
       return;
     }
     busy.current = true;
     setDecoding(true);
     setDecodeErr(null);
-    setPanel('decode');
+    setDecodeOpen(true);
     try {
       const engine = await getEngine();
       setEngineName(engine.info.name);
@@ -356,12 +360,10 @@ export default function App() {
     const cached = analysisCache.current.get(key);
     if (cached) {
       setRows(cached);
-      setPanel('stats');
       return;
     }
     busy.current = true;
     setAnalyzing(true);
-    setPanel('stats');
     try {
       const engine = await getEngine();
       setEngineName(engine.info.name);
@@ -392,6 +394,9 @@ export default function App() {
       setView(0);
       setHeaders({});
       setDecode(null);
+      setDecodeErr(null);
+      setDecodeOpen(false);
+      setInsightsOpen(false);
       setRows(null);
       clearBranch();
     } else {
@@ -418,9 +423,12 @@ export default function App() {
     setView(0);
     setHeaders({ FEN: fen });
     setDecode(null);
+    setDecodeErr(null);
+    setDecodeOpen(false);
+    setInsightsOpen(false);
     setRows(null);
     clearBranch();
-    setPanel('decode');
+    setPanel('game');
     return null;
   };
 
@@ -433,6 +441,18 @@ export default function App() {
     }
   }, [rows, effView, pos]);
 
+  const toggleDock = useCallback((id: DockToggle) => {
+    if (id === 'decode') {
+      if (decoding) return;
+      if (decodeOpen) setDecodeOpen(false);
+      else void runDecode();
+    } else {
+      setInsightsOpen((v) => !v);
+    }
+  }, [decoding, decodeOpen, runDecode]);
+  const hasCurrentDecode = decode?.fen === posFen;
+  const showDecodeDock = decodeOpen && (decoding || hasCurrentDecode || !!decodeErr);
+
   const pgn = useMemo(
     () => exportPgn(rootFen, moves, headers, branch),
     [rootFen, moves, headers, branch],
@@ -441,7 +461,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar onTool={onTool} onDecode={() => setPanel('decode')} />
+      <Sidebar onTool={onTool} onDecode={() => toggleDock('decode')} />
       <div className="main">
         <header className="topbar">
           <div className="tabrow">
@@ -449,7 +469,11 @@ export default function App() {
             <div className="tab-x" title="Close (single-board app)">✕</div>
             <div className="tab-plus" title="Single-board app">+</div>
           </div>
-          <Toolbar view={panel} setView={setPanel} engineName={engineName} />
+          <Toolbar
+          view={panel} setView={setPanel}
+          decodeActive={decodeOpen} insightsActive={insightsOpen}
+          onToggle={toggleDock} engineName={engineName}
+        />
         </header>
         <div className="layout">
           <main className="center">
@@ -485,8 +509,7 @@ export default function App() {
         </div>
       </main>
       <RightPanel view={panel}>
-        {decodeErr && panel === 'decode' && <div className="card err">{decodeErr}</div>}
-        {panel === 'decode' && <DecodeView data={decode?.fen === posFen ? decode : null} loading={decoding} />}
+        <div className="rp-context">
         {panel === 'game' && (
           <GameView
             rootFen={rootFen} sans={sans} view={effView} onGoto={gotoEff} result={headers['Result']}
@@ -509,11 +532,36 @@ export default function App() {
         {panel === 'stats' && (
           <StatsView rows={rows} analyzing={analyzing} progress={progress} onAnalyze={runAnalyze} onGoto={gotoEff} hasMoves={fullUcis.length > 0} />
         )}
-        {panel === 'insights' && (
-          <InsightsView rows={rows} rootFen={rootFen} moves={moves} view={effView} onInsight={gotoInsight} onAnalyze={runAnalyze} analyzing={analyzing} progress={progress} hasMoves={fullUcis.length > 0} />
-        )}
         {panel === 'info' && (
           <InfoView headers={headers} rootFen={rootFen} fen={posFen} moveCount={moves.length} pgn={pgn} />
+        )}
+        </div>
+        {(showDecodeDock || insightsOpen) && (
+          <div className="rp-dock">
+            {showDecodeDock && (
+              <section aria-label="Decode explanation" className="rp-dock-card">
+                <div className="rp-dock-head">
+                  <strong>Decode explanation</strong>
+                  <button className="btn sm" onClick={() => setDecodeOpen(false)}>Hide</button>
+                </div>
+                {decodeErr && !decoding && <div className="card err">{decodeErr}</div>}
+                <DecodeView data={hasCurrentDecode ? decode : null} loading={decoding} />
+              </section>
+            )}
+            {insightsOpen && (
+              <section aria-label="Insights" className="rp-dock-card">
+                <div className="rp-dock-head">
+                  <strong>Insights</strong>
+                  <button className="btn sm" onClick={() => setInsightsOpen(false)}>Hide</button>
+                </div>
+                <InsightsView
+                  rows={rows} rootFen={rootFen} moves={moves} view={effView}
+                  onInsight={gotoInsight} onAnalyze={runAnalyze}
+                  analyzing={analyzing} progress={progress} hasMoves={fullUcis.length > 0}
+                />
+              </section>
+            )}
+          </div>
         )}
       </RightPanel>
         </div>
