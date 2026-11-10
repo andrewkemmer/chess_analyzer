@@ -352,7 +352,7 @@ export default function App() {
       busy.current = false;
       setDecoding(false);
     }
-  }, [pos, posFen, depth, plies, effView, rootFen, fullUcis]);
+  }, [pos, posFen, depth, plies, effView, rootFen, fullUcis, rows]);
 
   const runAnalyze = useCallback(async () => {
     if (busy.current || !fullUcis.length) return;
